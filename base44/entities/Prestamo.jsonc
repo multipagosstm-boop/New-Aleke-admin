@@ -1,0 +1,127 @@
+{
+  "name": "Prestamo",
+  "type": "object",
+  "properties": {
+    "codigo": {
+      "type": "string",
+      "description": "Auto-generado: PK-001, PK-002..."
+    },
+    "cliente_id": {
+      "type": "string",
+      "description": "FK a Cliente"
+    },
+    "modelo": {
+      "type": "string",
+      "enum": [
+        "cuota_fija",
+        "mes_vencido"
+      ],
+      "description": "cuota_fija = cuota fija con intereses compuestos anticipados; mes_vencido = intereses simples por d\u00edas transcurridos"
+    },
+    "capital": {
+      "type": "number",
+      "description": "Capital inicial entregado al cliente"
+    },
+    "tasa_nominal": {
+      "type": "number",
+      "description": "Tasa nominal mensual pactada en decimal (0.05 = 5% mensual)"
+    },
+    "periodo": {
+      "type": "string",
+      "enum": [
+        "diaria",
+        "semanal",
+        "quincenal",
+        "mensual"
+      ],
+      "description": "Frecuencia de las cuotas (aplica a cuota_fija)"
+    },
+    "numero_cuotas": {
+      "type": "number"
+    },
+    "fecha_prestamo": {
+      "type": "string",
+      "format": "date"
+    },
+    "cuota_fija": {
+      "type": "number",
+      "default": 0,
+      "description": "Valor de la cuota fija (solo modelo cuota_fija)"
+    },
+    "tasa_efectiva_periodo": {
+      "type": "number",
+      "description": "Tasa efectiva del periodo calculada desde la nominal"
+    },
+    "tasa_efectiva_anual": {
+      "type": "number"
+    },
+    "total_intereses": {
+      "type": "number",
+      "default": 0,
+      "description": "Total de intereses a generar en toda la operaci\u00f3n"
+    },
+    "total_a_pagar": {
+      "type": "number",
+      "default": 0,
+      "description": "Capital + total_intereses"
+    },
+    "saldo_capital": {
+      "type": "number",
+      "default": 0,
+      "description": "Saldo de capital pendiente"
+    },
+    "saldo_intereses": {
+      "type": "number",
+      "default": 0,
+      "description": "Intereses pendientes acumulados (modelo mes_vencido cuando el abono fue menor a los intereses)"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "vigente",
+        "saldado",
+        "en_mora",
+        "refinanciado"
+      ],
+      "default": "vigente"
+    },
+    "comprobante_id": {
+      "type": "string",
+      "description": "FK a ComprobanteContable del desembolso del capital"
+    },
+    "subcuenta_cartera": {
+      "type": "string",
+      "description": "Subcuenta PUC de la cartera (activo) debitada al desembolso"
+    },
+    "subcuenta_intereses": {
+      "type": "string",
+      "description": "Subcuenta PUC de ingresos por intereses (4xxxx)"
+    },
+    "fecha_proximo_pago": {
+      "type": "string",
+      "format": "date"
+    },
+    "valor_proximo_pago": {
+      "type": "number",
+      "default": 0
+    },
+    "fecha_ultimo_abono": {
+      "type": "string",
+      "format": "date"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "codigo",
+    "cliente_id",
+    "modelo",
+    "capital",
+    "tasa_nominal",
+    "periodo",
+    "numero_cuotas",
+    "fecha_prestamo",
+    "estado"
+  ]
+}

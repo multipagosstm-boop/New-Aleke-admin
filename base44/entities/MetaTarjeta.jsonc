@@ -1,0 +1,62 @@
+{
+  "name": "MetaTarjeta",
+  "type": "object",
+  "properties": {
+    "producto_credito_id": {
+      "type": "string",
+      "description": "ID de la versi\u00f3n activa del ProductoCredito"
+    },
+    "codigo_interno": {
+      "type": "string",
+      "description": "C\u00f3digo interno permanente de la tarjeta (ej: BA001). Se mantiene aunque la tarjeta sea reemplazada."
+    },
+    "nombre_tarjeta": {
+      "type": "string",
+      "description": "Nombre de la tarjeta para display r\u00e1pido"
+    },
+    "banco": {
+      "type": "string",
+      "description": "C\u00f3digo del banco para filtrado r\u00e1pido"
+    },
+    "objetivo_cantidad": {
+      "type": "number",
+      "default": 0,
+      "description": "Meta de cantidad de compras por mes calendario (0 = sin meta de cantidad)"
+    },
+    "objetivo_valor": {
+      "type": "number",
+      "default": 0,
+      "description": "Meta de valor total de compras por mes calendario (0 = sin meta de valor)"
+    },
+    "fecha_inicio": {
+      "type": "string",
+      "format": "date",
+      "description": "Fecha de inicio del periodo de la meta"
+    },
+    "fecha_fin": {
+      "type": "string",
+      "format": "date",
+      "description": "Fecha de fin del periodo de la meta (t\u00edpicamente 6 meses)"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "activa",
+        "vencida",
+        "inactiva"
+      ],
+      "default": "activa"
+    },
+    "nota": {
+      "type": "string",
+      "description": "Notas sobre beneficios condicionados (ej: exenci\u00f3n cuota de manejo)"
+    }
+  },
+  "required": [
+    "producto_credito_id",
+    "codigo_interno",
+    "fecha_inicio",
+    "fecha_fin",
+    "estado"
+  ]
+}

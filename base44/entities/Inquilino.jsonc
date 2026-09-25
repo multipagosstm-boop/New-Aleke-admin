@@ -1,0 +1,54 @@
+{
+  "name": "Inquilino",
+  "type": "object",
+  "properties": {
+    "nombre_completo": {
+      "type": "string",
+      "description": "Nombre completo del inquilino"
+    },
+    "tipo_documento": {
+      "type": "string",
+      "enum": [
+        "CC",
+        "CE",
+        "PP",
+        "TI",
+        "NIT"
+      ],
+      "default": "CC"
+    },
+    "numero_documento": {
+      "type": "string",
+      "description": "N\u00famero de documento de identidad"
+    },
+    "lugar_expedicion": {
+      "type": "string",
+      "description": "Lugar de expedici\u00f3n del documento"
+    },
+    "email": {
+      "type": "string",
+      "description": "Correo de contacto del inquilino"
+    },
+    "telefono": {
+      "type": "string",
+      "description": "Tel\u00e9fono de contacto del inquilino"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "activo",
+        "inactivo"
+      ],
+      "default": "activo"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "nombre_completo",
+    "tipo_documento",
+    "numero_documento",
+    "estado"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "Cliente",
+  "type": "object",
+  "properties": {
+    "codigo": {
+      "type": "string",
+      "description": "C\u00f3digo auto-generado CLI-XXX. No editable despu\u00e9s de crear."
+    },
+    "nombre": {
+      "type": "string"
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "persona",
+        "empresa"
+      ],
+      "default": "persona"
+    },
+    "cedula": {
+      "type": "string"
+    },
+    "telefono": {
+      "type": "string"
+    },
+    "correo": {
+      "type": "string"
+    },
+    "direccion": {
+      "type": "string"
+    },
+    "ocupacion": {
+      "type": "string"
+    },
+    "lugar_trabajo": {
+      "type": "string"
+    },
+    "referido_por": {
+      "type": "string"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "activo",
+        "castigado"
+      ],
+      "default": "activo"
+    },
+    "cda_asignada_id": {
+      "type": "string",
+      "description": "FK opcional a CuentaAhorro. Cuenta donde el cliente realiza sus abonos."
+    },
+    "lineas_negocio": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Valores: multipagos, emprendamos, pakredito, alekerooftop. Vac\u00edo si estado=castigado."
+    },
+    "notas": {
+      "type": "string",
+      "description": "Observaciones internas de texto libre."
+    }
+  },
+  "required": [
+    "nombre",
+    "tipo",
+    "estado"
+  ]
+}

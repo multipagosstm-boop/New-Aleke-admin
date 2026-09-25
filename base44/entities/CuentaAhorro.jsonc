@@ -1,0 +1,48 @@
+{
+  "name": "CuentaAhorro",
+  "type": "object",
+  "properties": {
+    "nombre": {
+      "type": "string"
+    },
+    "numero_completo": {
+      "type": "string"
+    },
+    "banco": {
+      "type": "string"
+    },
+    "subcuenta_puc": {
+      "type": "string"
+    },
+    "titular_id": {
+      "type": "string"
+    },
+    "saldo": {
+      "type": "number",
+      "default": 0
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "activa",
+        "inactiva"
+      ],
+      "default": "activa"
+    },
+    "movimientos_mes_acumulado": {
+      "type": "number",
+      "default": 0
+    },
+    "nota": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "nombre",
+    "numero_completo",
+    "banco",
+    "titular_id",
+    "saldo",
+    "estado"
+  ]
+}

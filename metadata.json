@@ -1,0 +1,8 @@
+{
+  "name": "Aleke Admin",
+  "description": "Sistema administrativo y contable para gestión de créditos, conciliación bancaria, arriendos y finanzas.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

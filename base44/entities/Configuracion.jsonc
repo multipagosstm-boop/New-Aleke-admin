@@ -1,0 +1,26 @@
+{
+  "name": "Configuracion",
+  "type": "object",
+  "properties": {
+    "gmf_limite": {
+      "type": "number",
+      "default": 18331000
+    },
+    "gmf_a\u00f1o": {
+      "type": "number",
+      "default": 2026
+    },
+    "config_pin_hash": {
+      "type": "string"
+    },
+    "a\u00f1o_fiscal": {
+      "type": "number",
+      "default": 2026
+    }
+  },
+  "required": [
+    "gmf_limite",
+    "gmf_a\u00f1o",
+    "a\u00f1o_fiscal"
+  ]
+}

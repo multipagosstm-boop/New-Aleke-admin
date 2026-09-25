@@ -1,0 +1,63 @@
+{
+  "name": "CuotaAmortizacion",
+  "type": "object",
+  "properties": {
+    "prestamo_id": {
+      "type": "string",
+      "description": "FK a Prestamo"
+    },
+    "numero": {
+      "type": "number",
+      "description": "N\u00famero de cuota en el cronograma"
+    },
+    "fecha_vencimiento": {
+      "type": "string",
+      "format": "date"
+    },
+    "cuota": {
+      "type": "number",
+      "description": "Valor de la cuota (fija en cuota_fija; variable en mes_vencido)"
+    },
+    "interes": {
+      "type": "number",
+      "description": "Porci\u00f3n de intereses de la cuota"
+    },
+    "capital_abono": {
+      "type": "number",
+      "description": "Porci\u00f3n de capital de la cuota"
+    },
+    "saldo_capital": {
+      "type": "number",
+      "description": "Saldo de capital proyectado despu\u00e9s de la cuota"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "pendiente",
+        "pagada",
+        "parcial",
+        "vencida"
+      ],
+      "default": "pendiente"
+    },
+    "valor_pagado": {
+      "type": "number",
+      "default": 0
+    },
+    "fecha_pago": {
+      "type": "string",
+      "format": "date"
+    },
+    "abono_id": {
+      "type": "string",
+      "description": "FK a AbonoPrestamo que liquid\u00f3 esta cuota"
+    }
+  },
+  "required": [
+    "prestamo_id",
+    "numero",
+    "fecha_vencimiento",
+    "cuota",
+    "estado"
+  ]
+}

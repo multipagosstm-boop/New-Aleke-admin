@@ -1,0 +1,74 @@
+{
+  "name": "PagoArriendo",
+  "type": "object",
+  "properties": {
+    "inmueble_id": {
+      "type": "string",
+      "description": "FK a Inmueble"
+    },
+    "contrato_id": {
+      "type": "string",
+      "description": "FK a ContratoArriendo"
+    },
+    "inquilino_id": {
+      "type": "string",
+      "description": "FK a Cliente"
+    },
+    "periodo": {
+      "type": "string",
+      "description": "Mes que se est\u00e1 pagando, formato YYYY-MM"
+    },
+    "fecha_vencimiento": {
+      "type": "string",
+      "format": "date",
+      "description": "dia_pago del inmueble en el mes del per\u00edodo"
+    },
+    "fecha_pago_real": {
+      "type": "string",
+      "format": "date"
+    },
+    "valor_esperado": {
+      "type": "number"
+    },
+    "valor_pagado": {
+      "type": "number",
+      "default": 0
+    },
+    "saldo_restante": {
+      "type": "number",
+      "default": 0,
+      "description": "valor_esperado - valor_pagado cuando estado = parcial"
+    },
+    "dias_mora": {
+      "type": "number",
+      "default": 0,
+      "description": "Calculado: fecha_pago_real - fecha_vencimiento"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "pendiente",
+        "pagado",
+        "parcial",
+        "en_mora",
+        "condonado"
+      ],
+      "default": "pendiente"
+    },
+    "comprobante_id": {
+      "type": "string",
+      "description": "FK a ComprobanteContable generado al registrar pago"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "inmueble_id",
+    "contrato_id",
+    "inquilino_id",
+    "periodo",
+    "fecha_vencimiento",
+    "valor_esperado"
+  ]
+}

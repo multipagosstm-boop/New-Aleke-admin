@@ -1,0 +1,44 @@
+{
+  "name": "Generador de Intereses Mensual",
+  "description": "Genera autom\u00e1ticamente los intereses devengados del mes para todos los clientes activos de Emprendamos. Se ejecuta el \u00faltimo d\u00eda de cada mes a las 23:00 (America/Bogota). El cron dispara del 28 al 31 y la funci\u00f3n valida que sea el \u00faltimo d\u00eda real del mes.",
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 23 28-31 * *",
+      "one_time_date": null,
+      "timezone": "America/Bogota",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "generador_intereses_mensual",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "generar_intereses": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "generarInteresesAutomatico"
+          },
+          "then": "end",
+          "x-base44": {
+            "title": "Generar intereses mensuales",
+            "description": "Devengado de intereses Emprendamos"
+          }
+        }
+      }
+    ]
+  }
+}

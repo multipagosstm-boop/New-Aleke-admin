@@ -1,0 +1,145 @@
+{
+  "name": "ProductoCredito",
+  "type": "object",
+  "properties": {
+    "nomenclatura": {
+      "type": "string"
+    },
+    "codigo_interno": {
+      "type": "string",
+      "description": "Identificador l\u00f3gico permanente de la tarjeta, independiente de la versi\u00f3n. Ej: BA001"
+    },
+    "nombre": {
+      "type": "string"
+    },
+    "numero_completo": {
+      "type": "string",
+      "description": "N\u00famero completo del pl\u00e1stico (16 d\u00edgitos t\u00edpicamente). Obligatorio para TDC; los \u00faltimos 4 d\u00edgitos se derivan autom\u00e1ticamente para el nombre."
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "TDC",
+        "CH",
+        "LIB",
+        "CR",
+        "OTR"
+      ]
+    },
+    "banco": {
+      "type": "string"
+    },
+    "franquicia": {
+      "type": "string",
+      "enum": [
+        "Visa",
+        "Mastercard",
+        "American Express",
+        "Diners Club"
+      ],
+      "description": "Franquicia de la tarjeta de cr\u00e9dito (solo TDC)."
+    },
+    "categoria": {
+      "type": "string",
+      "enum": [
+        "Cl\u00e1sica",
+        "Oro",
+        "Platinum",
+        "Signature",
+        "Black",
+        "Infinite",
+        "Est\u00e1ndar",
+        "Otro"
+      ],
+      "description": "Categor\u00eda / nivel del producto (oro, cl\u00e1sica, platinum, etc.). Solo TDC."
+    },
+    "subcuenta_puc": {
+      "type": "string"
+    },
+    "titular_id": {
+      "type": "string"
+    },
+    "cupo": {
+      "type": "number",
+      "default": 0
+    },
+    "saldo": {
+      "type": "number",
+      "default": 0
+    },
+    "corte_modo": {
+      "type": "string",
+      "enum": [
+        "dia_fijo",
+        "dia_semana"
+      ],
+      "default": "dia_fijo",
+      "description": "dia_fijo = d\u00eda del calendario (ej: 15); dia_semana = N-\u00e9simo d\u00eda de la semana del mes (ej: primer viernes)."
+    },
+    "corte_semana": {
+      "type": "number",
+      "description": "Ordinal del d\u00eda de la semana (1=Primer, 2=Segundo, ..., 5=Quinto). Aplica cuando corte_modo = dia_semana."
+    },
+    "corte_dia_semana": {
+      "type": "number",
+      "description": "D\u00eda de la semana (1=Lunes ... 7=Domingo). Aplica cuando corte_modo = dia_semana."
+    },
+    "fecha_corte": {
+      "type": "number",
+      "description": "D\u00eda de corte efectivo. Para dia_fijo es el d\u00eda del calendario; para dia_semana es el d\u00eda calculado para el mes en curso."
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "activo",
+        "inactivo",
+        "bloqueado"
+      ],
+      "default": "activo"
+    },
+    "version_consecutivo": {
+      "type": "number",
+      "default": 1,
+      "description": "N\u00famero de versi\u00f3n: 1 = inicial, 2 = segunda versi\u00f3n, etc."
+    },
+    "version_padre_id": {
+      "type": "string",
+      "description": "ID de la versi\u00f3n ra\u00edz (primera versi\u00f3n de la tarjeta)"
+    },
+    "version_anterior_id": {
+      "type": "string",
+      "description": "ID de la versi\u00f3n inmediatamente anterior"
+    },
+    "operacion": {
+      "type": "string",
+      "enum": [
+        "creacion",
+        "reemplazo",
+        "unificacion",
+        "aumento_cupo"
+      ]
+    },
+    "operacion_fecha": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "operacion_detalle": {
+      "type": "string"
+    },
+    "saldo_favor_acumulado": {
+      "type": "number",
+      "default": 0,
+      "description": "Saldo a favor acumulado para aplicar al pr\u00f3ximo extracto"
+    }
+  },
+  "required": [
+    "nombre",
+    "tipo",
+    "banco",
+    "titular_id",
+    "cupo",
+    "saldo",
+    "fecha_corte",
+    "estado"
+  ]
+}

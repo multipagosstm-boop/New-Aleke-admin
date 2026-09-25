@@ -1,0 +1,47 @@
+{
+  "trigger": {
+    "condition": null,
+    "config": {
+      "trigger_type": "scheduled",
+      "events": [],
+      "schedule_mode": "recurring",
+      "cron_expression": "0 8 * * *",
+      "one_time_date": null,
+      "timezone": "America/Bogota",
+      "interval_value": null,
+      "interval_unit": null,
+      "interval_anchor": null,
+      "ends_type": "never",
+      "ends_on_date": null,
+      "ends_after_count": null
+    }
+  },
+  "name": "Recordatorio de Pagos",
+  "description": "Env\u00eda recordatorios por correo 3 d\u00edas antes del vencimiento de tarjetas, cr\u00e9ditos bancarios, PAKREDITO y Emprendamos. Corre diario a las 8:00 AM (America/Bogota).",
+  "definition": {
+    "document": {
+      "dsl": "1.0.0",
+      "name": "recordatorio_pagos",
+      "version": "1.0",
+      "namespace": "base44"
+    },
+    "do": [
+      {
+        "enviar_recordatorios": {
+          "call": "invoke_backend_function",
+          "with": {
+            "function_name": "recordatorioPagos",
+            "args": {
+              "dias": 3
+            }
+          },
+          "then": "end",
+          "x-base44": {
+            "title": "Enviar recordatorios de pago",
+            "description": "Notifica vencimientos a 3 d\u00edas"
+          }
+        }
+      }
+    ]
+  }
+}

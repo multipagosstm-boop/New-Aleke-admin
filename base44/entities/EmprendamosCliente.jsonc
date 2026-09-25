@@ -1,0 +1,90 @@
+{
+  "name": "EmprendamosCliente",
+  "type": "object",
+  "properties": {
+    "cliente_id": {
+      "type": "string",
+      "description": "FK a Cliente"
+    },
+    "fecha_ingreso": {
+      "type": "string",
+      "format": "date"
+    },
+    "dia_pago": {
+      "type": "number",
+      "description": "D\u00eda del mes para el cobro de la cuota (1-28). Recordatorio 3 d\u00edas antes."
+    },
+    "tasa_acordada": {
+      "type": "number",
+      "description": "Tasa nominal mensual acordada sobre el capital (decimal: 0.03 = 3%)"
+    },
+    "tasa_extracupo": {
+      "type": "number",
+      "default": 0.06,
+      "description": "Tasa mensual para cr\u00e9ditos extracupo (default 6%)"
+    },
+    "capital_inicial": {
+      "type": "number",
+      "default": 0,
+      "description": "Deuda asumida al inscribir al cliente (compra de cartera)"
+    },
+    "saldo_deuda": {
+      "type": "number",
+      "default": 0,
+      "description": "Saldo actual de la deuda con Emprendamos = capital_inicial + cr\u00e9ditos + intereses cargados - abonos"
+    },
+    "cupo_asignado": {
+      "type": "number",
+      "default": 0,
+      "description": "Cupo = suma de cupos de las TDC del cliente a su nombre"
+    },
+    "extracupo_autorizado": {
+      "type": "number",
+      "default": 0
+    },
+    "cda_apoderada_id": {
+      "type": "string",
+      "description": "FK a CuentaAhorro apoderada del cliente"
+    },
+    "comprobante_cartera_id": {
+      "type": "string",
+      "description": "Comprobante del asiento de compra de cartera inicial"
+    },
+    "plan_trazado": {
+      "type": "string",
+      "description": "Plan para mejorar el historial crediticio del cliente"
+    },
+    "contrato_url": {
+      "type": "string"
+    },
+    "fecha_eligible_salida": {
+      "type": "string",
+      "format": "date",
+      "description": "fecha_ingreso + 1 a\u00f1o. A partir de aqu\u00ed el cliente puede salir de Emprendamos."
+    },
+    "fecha_salida": {
+      "type": "string",
+      "format": "date"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "activo",
+        "suspendido",
+        "salido"
+      ],
+      "default": "activo"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cliente_id",
+    "fecha_ingreso",
+    "dia_pago",
+    "tasa_acordada",
+    "capital_inicial",
+    "estado"
+  ]
+}

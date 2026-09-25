@@ -1,0 +1,89 @@
+{
+  "name": "LineaExtracto",
+  "type": "object",
+  "properties": {
+    "extracto_id": {
+      "type": "string",
+      "description": "FK a ExtractoProducto al que pertenece esta l\u00ednea"
+    },
+    "producto_id": {
+      "type": "string",
+      "description": "FK a ProductoCredito (redundante para filtros r\u00e1pidos)"
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date",
+      "description": "Fecha del movimiento seg\u00fan el extracto del banco"
+    },
+    "descripcion": {
+      "type": "string",
+      "description": "Descripci\u00f3n tal como aparece en el extracto del banco"
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "compra",
+        "avance",
+        "financiero",
+        "abono",
+        "ajuste",
+        "intereses",
+        "seguros",
+        "comisiones",
+        "otros"
+      ],
+      "description": "Tipo de movimiento. TDC: compra, avance, financiero, abono, ajuste. Cr\u00e9dito (CH/LIB/CR): abono, intereses, seguros, comisiones, otros."
+    },
+    "valor": {
+      "type": "number",
+      "description": "Valor del movimiento (siempre positivo)"
+    },
+    "naturaleza": {
+      "type": "string",
+      "enum": [
+        "cargo",
+        "abono"
+      ],
+      "description": "cargo = aumenta deuda, abano = reduce deuda"
+    },
+    "subcuenta_gasto": {
+      "type": "string",
+      "description": "Subcuenta PUC de gasto financiero auto-clasificada desde el PDF (510504 cuota manejo, 510505 seguros, 510506 comisiones, 510507 otros gastos). Vac\u00edo para l\u00edneas no financieras."
+    },
+    "destino_cargo": {
+      "type": "string",
+      "enum": [
+        "gasto",
+        "otra_cuenta",
+        "no_registrar"
+      ],
+      "default": "gasto",
+      "description": "Decisi\u00f3n del usuario al cargar el extracto: gasto (lleva a gasto financiero), otra_cuenta (cruzar con otra subcuenta elegida), no_registrar (no crear asiento para este cargo)."
+    },
+    "estado_conciliacion": {
+      "type": "string",
+      "enum": [
+        "sin_conciliar",
+        "conciliado",
+        "en_disputa"
+      ],
+      "default": "sin_conciliar"
+    },
+    "movimiento_sistema_id": {
+      "type": "string",
+      "description": "FK a MovimientoContable cuando se concilia manualmente"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "extracto_id",
+    "producto_id",
+    "fecha",
+    "descripcion",
+    "tipo",
+    "valor",
+    "naturaleza"
+  ]
+}

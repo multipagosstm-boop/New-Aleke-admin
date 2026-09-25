@@ -1,0 +1,66 @@
+{
+  "name": "Cuenta",
+  "type": "object",
+  "properties": {
+    "codigo": {
+      "type": "number"
+    },
+    "nivel": {
+      "type": "string",
+      "enum": [
+        "Clase",
+        "Grupo",
+        "Cuenta",
+        "Subcuenta",
+        "Auxiliar"
+      ]
+    },
+    "clase": {
+      "type": "number"
+    },
+    "clase_nombre": {
+      "type": "string"
+    },
+    "grupo": {
+      "type": "number"
+    },
+    "cuenta": {
+      "type": "number"
+    },
+    "subcuenta": {
+      "type": "number"
+    },
+    "auxiliar": {
+      "type": "number"
+    },
+    "concepto": {
+      "type": "string"
+    },
+    "naturaleza": {
+      "type": "string",
+      "enum": [
+        "D\u00e9bito",
+        "Cr\u00e9dito"
+      ]
+    },
+    "tipo_estado": {
+      "type": "string",
+      "enum": [
+        "Balance",
+        "Resultado"
+      ]
+    },
+    "es_transaccional": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "codigo",
+    "nivel",
+    "concepto",
+    "naturaleza",
+    "tipo_estado",
+    "es_transaccional"
+  ]
+}

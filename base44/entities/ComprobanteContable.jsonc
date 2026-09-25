@@ -1,0 +1,73 @@
+{
+  "name": "ComprobanteContable",
+  "type": "object",
+  "properties": {
+    "numero": {
+      "type": "string"
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "diario",
+        "ingreso",
+        "egreso",
+        "apertura",
+        "cierre",
+        "nota_credito"
+      ],
+      "default": "diario"
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "fecha_registro": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Fecha y hora real de registro del comprobante en el sistema (auditor\u00eda)."
+    },
+    "descripcion": {
+      "type": "string"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "contabilizado",
+        "anulado"
+      ],
+      "default": "contabilizado"
+    },
+    "total_debito": {
+      "type": "number",
+      "default": 0
+    },
+    "total_credito": {
+      "type": "number",
+      "default": 0
+    },
+    "created_by_email": {
+      "type": "string"
+    },
+    "anulado_por_email": {
+      "type": "string"
+    },
+    "anulado_at": {
+      "type": "string"
+    },
+    "motivo_anulacion": {
+      "type": "string"
+    },
+    "comprobante_origen_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "numero",
+    "tipo",
+    "fecha",
+    "descripcion",
+    "estado",
+    "total_debito",
+    "total_credito"
+  ]
+}

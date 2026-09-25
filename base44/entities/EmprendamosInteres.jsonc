@@ -1,0 +1,54 @@
+{
+  "name": "EmprendamosInteres",
+  "type": "object",
+  "properties": {
+    "emprendamos_cliente_id": {
+      "type": "string"
+    },
+    "cliente_id": {
+      "type": "string"
+    },
+    "credito_id": {
+      "type": "string",
+      "description": "FK a EmprendamosCredito sobre el que se generaron los intereses"
+    },
+    "periodo": {
+      "type": "string",
+      "description": "Per\u00edodo cargado, formato YYYY-MM"
+    },
+    "capital_base": {
+      "type": "number"
+    },
+    "tasa": {
+      "type": "number"
+    },
+    "intereses": {
+      "type": "number"
+    },
+    "comprobante_id": {
+      "type": "string"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "generado",
+        "anulado"
+      ],
+      "default": "generado"
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "required": [
+    "emprendamos_cliente_id",
+    "cliente_id",
+    "credito_id",
+    "periodo",
+    "capital_base",
+    "tasa",
+    "intereses",
+    "fecha"
+  ]
+}

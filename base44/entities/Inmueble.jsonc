@@ -1,0 +1,63 @@
+{
+  "name": "Inmueble",
+  "type": "object",
+  "properties": {
+    "nombre": {
+      "type": "string"
+    },
+    "descripcion": {
+      "type": "string"
+    },
+    "direccion": {
+      "type": "string"
+    },
+    "valor_arriendo": {
+      "type": "number"
+    },
+    "valor_deposito": {
+      "type": "number",
+      "description": "Por defecto = valor_arriendo / 2"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "disponible",
+        "ocupado",
+        "mantenimiento"
+      ],
+      "default": "disponible"
+    },
+    "inquilino_id": {
+      "type": "string",
+      "description": "FK a Cliente \u2014 solo cuando estado = ocupado"
+    },
+    "tipo_propiedad": {
+      "type": "string",
+      "enum": [
+        "propio",
+        "tercero"
+      ],
+      "default": "propio",
+      "description": "propio = genera ingreso por cada abono; tercero = se administra para un tercero (no genera ingreso propio)."
+    },
+    "tipo_contrato": {
+      "type": "string",
+      "enum": [
+        "EDIFICIO",
+        "VENECIA",
+        "PARQUES_1",
+        "GENERICO"
+      ],
+      "default": "EDIFICIO",
+      "description": "Plantilla de contrato vinculada al inmueble (determina el PDF a generar)."
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "nombre",
+    "valor_arriendo",
+    "estado"
+  ]
+}

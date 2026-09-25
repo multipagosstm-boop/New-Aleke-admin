@@ -1,0 +1,199 @@
+{
+  "name": "ExtractoProducto",
+  "type": "object",
+  "properties": {
+    "producto_id": {
+      "type": "string"
+    },
+    "periodo": {
+      "type": "string"
+    },
+    "fecha_pago": {
+      "type": "string",
+      "format": "date"
+    },
+    "fecha_corte": {
+      "type": "string",
+      "format": "date",
+      "description": "Fecha exacta en que cort\u00f3 el extracto (ej: 2026-07-15)"
+    },
+    "fecha_corte_anterior": {
+      "type": "string",
+      "format": "date",
+      "description": "Fecha de corte del per\u00edodo anterior. Define el inicio del rango de movimientos a conciliar."
+    },
+    "saldo_a_pagar": {
+      "type": "number",
+      "default": 0
+    },
+    "saldo_anterior": {
+      "type": "number",
+      "default": 0,
+      "description": "Saldo de cierre del per\u00edodo anterior mostrado en el extracto. Se suma al saldo del sistema para comparar contra saldo_a_pagar."
+    },
+    "cuota_manejo": {
+      "type": "number",
+      "default": 0
+    },
+    "cuota_manejo_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "seguros": {
+      "type": "number",
+      "default": 0
+    },
+    "seguros_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "intereses_corrientes": {
+      "type": "number",
+      "default": 0
+    },
+    "intereses_corrientes_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "intereses_mora": {
+      "type": "number",
+      "default": 0
+    },
+    "intereses_mora_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "comisiones": {
+      "type": "number",
+      "default": 0
+    },
+    "comisiones_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "otros_gastos": {
+      "type": "number",
+      "default": 0
+    },
+    "otros_gastos_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "rendimientos": {
+      "type": "number",
+      "default": 0
+    },
+    "rendimientos_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "cashback": {
+      "type": "number",
+      "default": 0
+    },
+    "cashback_fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "observaciones": {
+      "type": "string"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "pendiente_registro",
+        "pendiente_pago",
+        "pagado",
+        "saltado"
+      ],
+      "default": "pendiente_registro",
+      "description": "saltado = per\u00edodo saltado a prop\u00f3sito (tarjeta cancelada o extracto no disponible). No aparece como pendiente ni se concilia."
+    },
+    "motivo_salto": {
+      "type": "string",
+      "description": "Raz\u00f3n por la que se salt\u00f3 el per\u00edodo del extracto."
+    },
+    "comprobante_id": {
+      "type": "string"
+    },
+    "total_abonado": {
+      "type": "number",
+      "default": 0
+    },
+    "saldo_pendiente": {
+      "type": "number",
+      "default": 0
+    },
+    "porcentaje_pagado": {
+      "type": "number",
+      "default": 0
+    },
+    "saldo_a_favor": {
+      "type": "number",
+      "default": 0
+    },
+    "pagado_automaticamente": {
+      "type": "boolean",
+      "default": false
+    },
+    "fecha_pago_efectivo": {
+      "type": "string",
+      "format": "date"
+    },
+    "saldo_sistema": {
+      "type": "number",
+      "default": 0,
+      "description": "Saldo calculado desde los movimientos del sistema para este per\u00edodo"
+    },
+    "diferencia_saldo": {
+      "type": "number",
+      "default": 0,
+      "description": "saldo_a_pagar - saldo_anterior - saldo_sistema. Si es 0, la conciliaci\u00f3n est\u00e1 perfecta."
+    },
+    "estado_conciliacion": {
+      "type": "string",
+      "enum": [
+        "sin_iniciar",
+        "en_proceso",
+        "conciliado",
+        "con_diferencias",
+        "cerrado"
+      ],
+      "default": "sin_iniciar",
+      "description": "cerrado = conciliaci\u00f3n cerrada definitivamente, validada y bloqueada contra modificaciones (irreversible)."
+    },
+    "total_lineas_banco": {
+      "type": "number",
+      "default": 0
+    },
+    "total_lineas_sistema": {
+      "type": "number",
+      "default": 0
+    },
+    "lineas_conciliadas": {
+      "type": "number",
+      "default": 0
+    },
+    "lineas_faltantes": {
+      "type": "number",
+      "default": 0
+    },
+    "lineas_sobrantes": {
+      "type": "number",
+      "default": 0
+    },
+    "fecha_conciliacion": {
+      "type": "string",
+      "format": "date"
+    },
+    "conciliado_por_email": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "producto_id",
+    "periodo",
+    "saldo_a_pagar",
+    "estado"
+  ]
+}

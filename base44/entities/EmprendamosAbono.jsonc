@@ -1,0 +1,72 @@
+{
+  "name": "EmprendamosAbono",
+  "type": "object",
+  "properties": {
+    "cliente_id": {
+      "type": "string"
+    },
+    "emprendamos_cliente_id": {
+      "type": "string"
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "valor_total": {
+      "type": "number"
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "cuota_minima",
+        "capital",
+        "total",
+        "fijo",
+        "otro"
+      ],
+      "default": "otro",
+      "description": "cuota_minima = intereses del mes anterior; capital = abono a capital; total = pago total del cr\u00e9dito; fijo = cuota fija estipulada"
+    },
+    "comprobante_id": {
+      "type": "string"
+    },
+    "subcuenta_ingreso": {
+      "type": "string"
+    },
+    "cda_id": {
+      "type": "string"
+    },
+    "producto_credito_id": {
+      "type": "string"
+    },
+    "detalles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "credito_id": {
+            "type": "string"
+          },
+          "valor_aplicado": {
+            "type": "number"
+          },
+          "intereses": {
+            "type": "number"
+          },
+          "capital": {
+            "type": "number"
+          }
+        }
+      },
+      "default": []
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cliente_id",
+    "fecha",
+    "valor_total"
+  ]
+}

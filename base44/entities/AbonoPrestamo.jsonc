@@ -1,0 +1,60 @@
+{
+  "name": "AbonoPrestamo",
+  "type": "object",
+  "properties": {
+    "cliente_id": {
+      "type": "string",
+      "description": "FK a Cliente"
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "valor_total": {
+      "type": "number",
+      "description": "Total de dinero recibido en el abono"
+    },
+    "comprobante_id": {
+      "type": "string",
+      "description": "FK a ComprobanteContable del ingreso"
+    },
+    "subcuenta_ingreso": {
+      "type": "string",
+      "description": "Subcuenta PUC donde ingres\u00f3 el dinero (CDA, efectivo, TDC, cruce, etc.)"
+    },
+    "cda_id": {
+      "type": "string",
+      "description": "FK a CuentaAhorro cuando el ingreso fue por una CDA (opcional)"
+    },
+    "detalles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "prestamo_id": {
+            "type": "string"
+          },
+          "valor_aplicado": {
+            "type": "number"
+          },
+          "intereses": {
+            "type": "number"
+          },
+          "capital": {
+            "type": "number"
+          }
+        }
+      },
+      "default": [],
+      "description": "Desglose del abono por cada cr\u00e9dito abonado"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cliente_id",
+    "fecha",
+    "valor_total"
+  ]
+}

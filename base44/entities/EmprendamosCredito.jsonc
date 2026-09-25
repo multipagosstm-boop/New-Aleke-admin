@@ -1,0 +1,94 @@
+{
+  "name": "EmprendamosCredito",
+  "type": "object",
+  "properties": {
+    "emprendamos_cliente_id": {
+      "type": "string",
+      "description": "FK a EmprendamosCliente"
+    },
+    "cliente_id": {
+      "type": "string",
+      "description": "FK a Cliente (redundante para filtros)"
+    },
+    "codigo": {
+      "type": "string",
+      "description": "Auto-generado: EM-001, EM-002..."
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "cartera_inicial",
+        "habitual",
+        "extracupo",
+        "comision"
+      ],
+      "description": "cartera_inicial = deuda asumida al inscribir; habitual = pr\u00e9stamo dentro del cupo; extracupo = pr\u00e9stamo extra beyond cupo (6%); comision = 10% por nuevo producto adquirido (no genera intereses)"
+    },
+    "concepto": {
+      "type": "string"
+    },
+    "capital": {
+      "type": "number",
+      "default": 0
+    },
+    "tasa_nominal": {
+      "type": "number",
+      "default": 0,
+      "description": "Tasa nominal mensual (decimal). 0 para comisiones."
+    },
+    "cuota_fija": {
+      "type": "number",
+      "default": 0,
+      "description": "Cuota fija opcional. 0 = sin cuota fija (la cuota m\u00ednima son los intereses del mes anterior)."
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "dia_pago": {
+      "type": "number"
+    },
+    "fecha_proximo_pago": {
+      "type": "string",
+      "format": "date"
+    },
+    "saldo_capital": {
+      "type": "number",
+      "default": 0
+    },
+    "saldo_intereses": {
+      "type": "number",
+      "default": 0,
+      "description": "Intereses cargados (devengado) pendientes de pago"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "vigente",
+        "saldado",
+        "anulado"
+      ],
+      "default": "vigente"
+    },
+    "comprobante_id": {
+      "type": "string"
+    },
+    "producto_credito_id": {
+      "type": "string",
+      "description": "FK opcional a ProductoCredito si el cr\u00e9dito se asoci\u00f3 a un producto concreto"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "emprendamos_cliente_id",
+    "cliente_id",
+    "codigo",
+    "tipo",
+    "capital",
+    "tasa_nominal",
+    "fecha",
+    "estado"
+  ]
+}

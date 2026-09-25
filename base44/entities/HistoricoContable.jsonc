@@ -1,0 +1,39 @@
+{
+  "name": "HistoricoContable",
+  "type": "object",
+  "properties": {
+    "comprobante_id": {
+      "type": "string"
+    },
+    "numero_comprobante": {
+      "type": "string"
+    },
+    "accion": {
+      "type": "string"
+    },
+    "descripcion": {
+      "type": "string"
+    },
+    "monto_total": {
+      "type": "number",
+      "default": 0
+    },
+    "usuario_email": {
+      "type": "string"
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date"
+    },
+    "datos_snapshot": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "numero_comprobante",
+    "accion",
+    "descripcion",
+    "monto_total",
+    "fecha"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Consecutivo",
+  "type": "object",
+  "properties": {
+    "a\u00f1o": {
+      "type": "number"
+    },
+    "tipo": {
+      "type": "string",
+      "default": "comprobante",
+      "description": "Tipo de consecutivo: comprobante, cliente, etc."
+    },
+    "ultimo_numero": {
+      "type": "number",
+      "default": 0
+    },
+    "ultimo_token": {
+      "type": "string",
+      "description": "Token \u00fanico por llamada para detecci\u00f3n de colisiones bajo concurrencia"
+    }
+  },
+  "required": [
+    "a\u00f1o",
+    "ultimo_numero"
+  ]
+}

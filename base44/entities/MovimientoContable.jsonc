@@ -1,0 +1,106 @@
+{
+  "name": "MovimientoContable",
+  "type": "object",
+  "properties": {
+    "comprobante_id": {
+      "type": "string"
+    },
+    "clase": {
+      "type": "string",
+      "enum": [
+        "activo",
+        "pasivo",
+        "patrimonio",
+        "ingreso",
+        "gasto"
+      ]
+    },
+    "grupo": {
+      "type": "string"
+    },
+    "cuenta": {
+      "type": "string"
+    },
+    "subcuenta": {
+      "type": "string"
+    },
+    "cuenta_nombre": {
+      "type": "string"
+    },
+    "prefijo_cuenta": {
+      "type": "string"
+    },
+    "debito": {
+      "type": "number",
+      "default": 0
+    },
+    "credito": {
+      "type": "number",
+      "default": 0
+    },
+    "descripcion": {
+      "type": "string"
+    },
+    "tercero": {
+      "type": "string"
+    },
+    "cliente_id": {
+      "type": "string"
+    },
+    "modelo_negocio": {
+      "type": "string"
+    },
+    "periodo_operacion": {
+      "type": "string"
+    },
+    "periodo_extracto": {
+      "type": "string"
+    },
+    "tipo_movimiento_tdc": {
+      "type": "string",
+      "enum": [
+        "compra",
+        "avance",
+        "financiero",
+        "abono"
+      ]
+    },
+    "cuenta_ahorro_id": {
+      "type": "string"
+    },
+    "producto_credito_id": {
+      "type": "string"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "activo",
+        "anulado"
+      ],
+      "default": "activo"
+    },
+    "fecha": {
+      "type": "string",
+      "format": "date",
+      "description": "Fecha contable del movimiento (la del comprobante)."
+    },
+    "fecha_registro": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Fecha y hora real en que el movimiento fue registrado en el sistema (auditor\u00eda)."
+    },
+    "created_by_email": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "comprobante_id",
+    "clase",
+    "subcuenta",
+    "cuenta_nombre",
+    "debito",
+    "credito",
+    "estado",
+    "fecha"
+  ]
+}

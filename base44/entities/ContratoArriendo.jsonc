@@ -1,0 +1,91 @@
+{
+  "name": "ContratoArriendo",
+  "type": "object",
+  "properties": {
+    "codigo": {
+      "type": "string",
+      "description": "Auto-generado: ARR-001, ARR-002..."
+    },
+    "inmueble_id": {
+      "type": "string",
+      "description": "FK a Inmueble"
+    },
+    "inquilino_id": {
+      "type": "string",
+      "description": "FK a Inquilino (o a Cliente para contratos hist\u00f3ricos)"
+    },
+    "tipo_contrato": {
+      "type": "string",
+      "enum": [
+        "EDIFICIO",
+        "VENECIA",
+        "PARQUES_1",
+        "GENERICO"
+      ],
+      "description": "Plantilla del contrato, determinada por el inmueble"
+    },
+    "fecha_inicio": {
+      "type": "string",
+      "format": "date"
+    },
+    "fecha_fin": {
+      "type": "string",
+      "format": "date",
+      "description": "Calculado autom\u00e1ticamente: fecha_inicio + duracion_meses"
+    },
+    "duracion_meses": {
+      "type": "number",
+      "default": 6,
+      "description": "Duraci\u00f3n del contrato en meses"
+    },
+    "valor_arriendo": {
+      "type": "number",
+      "description": "El valor vigente al momento del contrato"
+    },
+    "valor_deposito": {
+      "type": "number"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "vigente",
+        "por_vencer",
+        "vencido",
+        "renovado",
+        "terminado"
+      ],
+      "default": "vigente"
+    },
+    "deposito_pagado": {
+      "type": "boolean",
+      "default": false
+    },
+    "comprobante_deposito_id": {
+      "type": "string",
+      "description": "FK a ComprobanteContable del pago del dep\u00f3sito"
+    },
+    "documento_pdf_url": {
+      "type": "string",
+      "description": "URL del contrato generado en PDF"
+    },
+    "email_enviado": {
+      "type": "boolean",
+      "default": false
+    },
+    "alertas_enviadas": {
+      "type": "number",
+      "default": 0,
+      "description": "Contador de alertas de vencimiento enviadas"
+    },
+    "notas": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "inmueble_id",
+    "inquilino_id",
+    "fecha_inicio",
+    "valor_arriendo",
+    "valor_deposito"
+  ]
+}
