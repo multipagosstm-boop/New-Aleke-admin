@@ -1,10 +1,12 @@
-export function formatCOP(value) {
+export function formatCOP(value, allowDecimals = true) {
+  const num = Number(value) || 0;
+  const hasDecimals = allowDecimals && Math.abs(num % 1) > 0.001;
   return new Intl.NumberFormat("es-CO", {
     style: "currency",
     currency: "COP",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
-  }).format(Number(value) || 0);
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: hasDecimals ? 2 : 0
+  }).format(num);
 }
 
 export function formatNumber(value, decimals = 0) {

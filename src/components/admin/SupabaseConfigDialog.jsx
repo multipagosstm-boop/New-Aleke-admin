@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { getSupabaseCredentials, saveSupabaseCredentials, getSupabase, normalizeSupabaseUrl, normalizeSupabaseKey } from '@/api/supabaseClient';
-import { Database, CheckCircle2, AlertCircle, Copy, Check, ExternalLink, RefreshCw, Download, FileText, ShieldAlert, BookOpen } from 'lucide-react';
+import { Database, CheckCircle2, AlertCircle, Copy, Check, ExternalLink, RefreshCw, Download, FileText, ShieldAlert, BookOpen, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 function downloadSql(content, filename) {
@@ -33,10 +33,12 @@ export default function SupabaseConfigDialog({ open, onOpenChange }) {
   const [seedSql, setSeedSql] = useState('');
   const [fixRlsSql, setFixRlsSql] = useState('');
   const [comprobantesSql, setComprobantesSql] = useState('');
+  const [limpiarSql, setLimpiarSql] = useState('');
   const [copiedSchema, setCopiedSchema] = useState(false);
   const [copiedSeed, setCopiedSeed] = useState(false);
   const [copiedFix, setCopiedFix] = useState(false);
   const [copiedComps, setCopiedComps] = useState(false);
+  const [copiedLimpiar, setCopiedLimpiar] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -59,6 +61,10 @@ export default function SupabaseConfigDialog({ open, onOpenChange }) {
       fetch('/supabase/comprobantes_puc_seed.sql')
         .then(res => res.text())
         .then(text => setComprobantesSql(text))
+        .catch(() => {});
+      fetch('/supabase/limpiar_base_datos.sql')
+        .then(res => res.text())
+        .then(text => setLimpiarSql(text))
         .catch(() => {});
 
       if (creds.url && creds.anonKey) {
@@ -185,6 +191,9 @@ export default function SupabaseConfigDialog({ open, onOpenChange }) {
     } else if (type === 'fix') {
       setCopiedFix(true);
       setTimeout(() => setCopiedFix(false), 2000);
+    } else if (type === 'limpiar') {
+      setCopiedLimpiar(true);
+      setTimeout(() => setCopiedLimpiar(false), 2000);
     } else {
       setCopiedComps(true);
       setTimeout(() => setCopiedComps(false), 2000);
@@ -201,21 +210,24 @@ export default function SupabaseConfigDialog({ open, onOpenChange }) {
             Configuración & Diagnóstico de Supabase
           </DialogTitle>
           <DialogDescription>
-            Verifica el estado de tus tablas, soluciona permisos RLS y carga los comprobantes contables.
+            Verifica el estado de tus tablas, soluciona permisos RLS, limpia datos o carga comprobantes.
           </DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="credenciales" className="flex-1 flex flex-col min-h-0">
-          <TabsList className="grid grid-cols-5 mb-3">
+          <TabsList className="grid grid-cols-6 mb-3">
             <TabsTrigger value="credenciales">1. Diagnóstico</TabsTrigger>
             <TabsTrigger value="comprobantes" className="text-emerald-700 dark:text-emerald-400 font-medium">
-              📄 Comprobantes & PUC
+              📄 Comprobantes
             </TabsTrigger>
             <TabsTrigger value="fix" className="text-amber-600 dark:text-amber-400 font-medium">
               ⚡ Permisos RLS
             </TabsTrigger>
-            <TabsTrigger value="seed">Datos Base (Seed)</TabsTrigger>
-            <TabsTrigger value="schema">Tablas (Schema)</TabsTrigger>
+            <TabsTrigger value="limpiar" className="text-rose-600 dark:text-rose-400 font-medium">
+              🧹 Limpiar BD
+            </TabsTrigger>
+            <TabsTrigger value="seed">Datos Base</TabsTrigger>
+            <TabsTrigger value="schema">Tablas (DDL)</TabsTrigger>
           </TabsList>
 
           {/* TAB 1: CREDENCIALES & DIAGNÓSTICO */}
@@ -422,6 +434,43 @@ export default function SupabaseConfigDialog({ open, onOpenChange }) {
 
             <div className="flex-1 bg-neutral-950 text-neutral-100 p-4 rounded-lg font-mono text-xs overflow-y-auto max-h-[340px] border border-neutral-800">
               <pre>{schemaSql || '-- Cargando esquema SQL...'}</pre>
+            </div>
+          </TabsContent>
+
+          {/* TAB: LIMPIAR BD */}
+          <TabsContent value="limpiar" className="flex-1 flex flex-col min-h-0 space-y-3">
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-lg text-xs text-rose-900 dark:text-rose-200 flex items-start gap-2">
+              <Trash2 className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <strong>Limpieza Total para Nueva Carga de Archivos CSV:</strong>
+                <p className="mt-0.5">
+                  Este script vacía todas las tablas operativas y contables mediante <code>TRUNCATE ... RESTART IDENTITY CASCADE</code>. Mantiene la estructura de tablas, columnas, tipos de datos e índices 100% intactos para que puedas subir tus nuevos archivos CSV sin conflictos de IDs o duplicados.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Script SQL para truncar y limpiar tablas:</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => downloadSql(limpiarSql, 'limpiar_base_datos.sql')}>
+                  <Download className="w-3.5 h-3.5 mr-1" />
+                  Descargar SQL
+                </Button>
+                <Button size="sm" onClick={() => handleCopy(limpiarSql, 'limpiar')} className="bg-rose-600 hover:bg-rose-700 text-white">
+                  {copiedLimpiar ? <Check className="w-3.5 h-3.5 mr-1" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
+                  {copiedLimpiar ? '¡Copiado!' : 'Copiar SQL Limpieza'}
+                </Button>
+                <Button size="sm" variant="ghost" asChild>
+                  <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">
+                    <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                    Abrir SQL Editor
+                  </a>
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-neutral-950 text-neutral-100 p-4 rounded-lg font-mono text-xs overflow-y-auto max-h-[340px] border border-neutral-800">
+              <pre>{limpiarSql || '-- Cargando script de limpieza...'}</pre>
             </div>
           </TabsContent>
         </Tabs>

@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Upload, FileSpreadsheet, Download, CheckCircle2, XCircle, AlertCircle, Sparkles } from "lucide-react";
+import { Upload, FileSpreadsheet, Download, CheckCircle2, XCircle, AlertCircle, Sparkles, AlertTriangle, Copy } from "lucide-react";
 import * as XLSX from "xlsx";
 import { formatCOP, formatDate } from "@/lib/contabilidad";
+import { toast } from "sonner";
 
 const COLUMNAS_REQ = ["fecha", "comprobante_numero", "descripcion", "subcuenta", "debito", "credito"];
 
@@ -58,7 +59,17 @@ export default function CargaMasiva() {
   const [resultado, setResultado] = useState(null);
   const [error, setError] = useState("");
   const [productosMap, setProductosMap] = useState({});
+  const [rlsAlert, setRlsAlert] = useState(false);
   const fileRef = useRef(null);
+
+  // Escuchar violaciones de RLS si ocurren en inserciones
+  useEffect(() => {
+    const handleRls = () => {
+      setRlsAlert(true);
+    };
+    window.addEventListener('supabase-rls-violation', handleRls);
+    return () => window.removeEventListener('supabase-rls-violation', handleRls);
+  }, []);
 
   // Mapa de codigo_interno -> tipo de producto, para hint de auto-detección TDC
   useEffect(() => {
@@ -150,7 +161,54 @@ export default function CargaMasiva() {
 
   return (
     <div className="p-6 space-y-4">
-      <h1 className="text-xl font-heading font-semibold">Carga Masiva de Movimientos</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-heading font-semibold">Carga Masiva de Movimientos</h1>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-xs text-muted-foreground gap-1.5"
+          onClick={() => {
+            fetch('/supabase/fix_rls_data_loading.sql')
+              .then(res => res.text())
+              .then(sql => {
+                navigator.clipboard.writeText(sql);
+                toast.success('Script SQL de desbloqueo RLS copiado al portapapeles.');
+              });
+          }}
+          title="Copiar script SQL para garantizar que RLS no afecte la carga en Supabase"
+        >
+          <Copy className="w-3.5 h-3.5" /> Script Permisos RLS
+        </Button>
+      </div>
+
+      {rlsAlert && (
+        <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs space-y-2 text-amber-900 dark:text-amber-300">
+          <div className="font-semibold flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              Supabase RLS Detectado: Las políticas de seguridad pueden bloquear la inserción en la base de datos.
+            </span>
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="h-7 text-xs border-amber-500/40 bg-card hover:bg-muted"
+              onClick={() => {
+                fetch('/supabase/fix_rls_data_loading.sql')
+                  .then(res => res.text())
+                  .then(sql => {
+                    navigator.clipboard.writeText(sql);
+                    toast.success('Script SQL copiado. Pégalo y ejecútalo en Supabase -> SQL Editor.');
+                  });
+              }}
+            >
+              <Copy className="w-3.5 h-3.5 mr-1" /> Copiar Script SQL de Desbloqueo
+            </Button>
+          </div>
+          <p className="text-[11px] opacity-90">
+            Para garantizar que todas las tablas acepten cargas masivas de datos sin restricciones de RLS, ejecuta el script <code>fix_rls_data_loading.sql</code> en el SQL Editor de tu proyecto de Supabase.
+          </p>
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-4 space-y-3">

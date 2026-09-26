@@ -38,14 +38,17 @@ export function normalizeSupabaseKey(rawKey) {
   return String(rawKey).trim().replace(/^['"]+|['"]+$/g, '');
 }
 
+const DEFAULT_SUPABASE_URL = 'https://tktxnvuuanlgsreiuwsm.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRrdHhudnV1YW5sZ3NyZWl1d3NtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAyNzU2NTEsImV4cCI6MjEwNTg1MTY1MX0.KPv4eH9ViHQ7MCR2dSSgyOH1hM4Ka16Fjm9j3-NpvPU';
+
 export function getSupabaseCredentials() {
   const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_URL_KEY) || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_KEY) || '' : '';
 
-  const rawUrl = localUrl || envUrl || '';
-  const rawKey = localKey || envKey || '';
+  const rawUrl = localUrl || envUrl || DEFAULT_SUPABASE_URL;
+  const rawKey = localKey || envKey || DEFAULT_SUPABASE_KEY;
 
   return {
     url: normalizeSupabaseUrl(rawUrl),
@@ -106,6 +109,25 @@ export function getSupabase() {
   }
 }
 
+// Direct supabase client export with graceful query proxy fallback
+export const supabase = new Proxy({}, {
+  get(target, prop) {
+    const client = getSupabase();
+    if (client && prop in client) {
+      const val = client[prop];
+      return typeof val === 'function' ? val.bind(client) : val;
+    }
+    return () => ({
+      select: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }), limit: () => Promise.resolve({ data: [], error: null }) }),
+      insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: {}, error: null }) }) }),
+      update: () => ({ eq: () => ({ select: () => ({ single: () => Promise.resolve({ data: {}, error: null }) }) }) }),
+      delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      eq: () => ({ single: () => Promise.resolve({ data: null, error: null }) }),
+      in: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) })
+    });
+  }
+});
+
 // In-memory fallback cache when Supabase is not yet configured or for offline prototyping
 const memoryStore = new Map();
 
@@ -133,6 +155,28 @@ function deduplicateById(items) {
   return result;
 }
 
+// RLS Error Handler and Detector
+export function handleRlsViolation(tableName, operation, error) {
+  if (!error) return false;
+  const isRls = error.code === '42501' || 
+                error.message?.toLowerCase().includes('row-level security') || 
+                error.message?.toLowerCase().includes('violates');
+  if (isRls) {
+    console.warn(`[Supabase RLS Alert] Operación "${operation}" en tabla "${tableName}" afectada por RLS: ${error.message}`);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('supabase-rls-violation', {
+        detail: {
+          table: tableName,
+          operation,
+          message: error.message
+        }
+      }));
+    }
+    return true;
+  }
+  return false;
+}
+
 // Generic entity repository builder
 export function createEntityRepository(entityName) {
   const table = entityToTable(entityName);
@@ -140,6 +184,7 @@ export function createEntityRepository(entityName) {
   return {
     async list(sort = null, limit = 5000) {
       const client = getSupabase();
+      let dbData = [];
       if (client) {
         let query = client.from(table).select('*');
         if (sort) {
@@ -150,13 +195,14 @@ export function createEntityRepository(entityName) {
         if (limit) query = query.limit(limit);
         const { data, error } = await query;
         if (error) {
+          handleRlsViolation(table, 'list', error);
           console.warn(`Supabase list error for ${table}:`, error.message);
-          // Return memory store if table doesn't exist yet
-          return deduplicateById(Array.from(getMemoryCollection(table).values()));
+        } else if (Array.isArray(data)) {
+          dbData = data;
         }
-        return deduplicateById(data || []);
       }
-      return deduplicateById(Array.from(getMemoryCollection(table).values()));
+      const memItems = Array.from(getMemoryCollection(table).values());
+      return deduplicateById([...dbData, ...memItems]);
     },
 
     async filter(criteria = {}, sort = null, limit = 5000) {
@@ -165,7 +211,16 @@ export function createEntityRepository(entityName) {
         let query = client.from(table).select('*');
         for (const [key, val] of Object.entries(criteria || {})) {
           if (val !== undefined && val !== null) {
-            query = query.eq(key, val);
+            if (typeof val === 'object' && !Array.isArray(val)) {
+              if (val.$in && Array.isArray(val.$in)) query = query.in(key, val.$in);
+              if (val.$gte !== undefined) query = query.gte(key, val.$gte);
+              if (val.$lte !== undefined) query = query.lte(key, val.$lte);
+              if (val.$gt !== undefined) query = query.gt(key, val.$gt);
+              if (val.$lt !== undefined) query = query.lt(key, val.$lt);
+              if (val.$neq !== undefined) query = query.neq(key, val.$neq);
+            } else {
+              query = query.eq(key, val);
+            }
           }
         }
         if (sort) {
@@ -180,7 +235,18 @@ export function createEntityRepository(entityName) {
           // Fallback to memory filter
           const all = Array.from(getMemoryCollection(table).values());
           const filtered = all.filter(item => {
-            return Object.entries(criteria).every(([k, v]) => String(item[k]) === String(v));
+            return Object.entries(criteria || {}).every(([k, v]) => {
+              if (v === undefined || v === null) return true;
+              if (typeof v === 'object' && !Array.isArray(v)) {
+                if (v.$in && Array.isArray(v.$in)) return v.$in.map(String).includes(String(item[k]));
+                if (v.$gte !== undefined) return item[k] >= v.$gte;
+                if (v.$lte !== undefined) return item[k] <= v.$lte;
+                if (v.$gt !== undefined) return item[k] > v.$gt;
+                if (v.$lt !== undefined) return item[k] < v.$lt;
+                if (v.$neq !== undefined) return String(item[k]) !== String(v.$neq);
+              }
+              return String(item[k]) === String(v);
+            });
           });
           return deduplicateById(filtered);
         }
@@ -190,7 +256,18 @@ export function createEntityRepository(entityName) {
       // Memory filter fallback
       const all = Array.from(getMemoryCollection(table).values());
       const filtered = all.filter(item => {
-        return Object.entries(criteria || {}).every(([k, v]) => String(item[k]) === String(v));
+        return Object.entries(criteria || {}).every(([k, v]) => {
+          if (v === undefined || v === null) return true;
+          if (typeof v === 'object' && !Array.isArray(v)) {
+            if (v.$in && Array.isArray(v.$in)) return v.$in.map(String).includes(String(item[k]));
+            if (v.$gte !== undefined) return item[k] >= v.$gte;
+            if (v.$lte !== undefined) return item[k] <= v.$lte;
+            if (v.$gt !== undefined) return item[k] > v.$gt;
+            if (v.$lt !== undefined) return item[k] < v.$lt;
+            if (v.$neq !== undefined) return String(item[k]) !== String(v.$neq);
+          }
+          return String(item[k]) === String(v);
+        });
       });
       return deduplicateById(filtered);
     },
@@ -227,6 +304,7 @@ export function createEntityRepository(entityName) {
           getMemoryCollection(table).set(id, data);
           return data;
         }
+        handleRlsViolation(table, 'create', error);
         console.warn(`Supabase insert fallback for ${table}:`, error?.message);
       }
 
@@ -249,6 +327,7 @@ export function createEntityRepository(entityName) {
           coll.set(id, { ...coll.get(id), ...data });
           return data;
         }
+        handleRlsViolation(table, 'update', error);
         console.warn(`Supabase update fallback for ${table}:`, error?.message);
       }
 
@@ -263,9 +342,37 @@ export function createEntityRepository(entityName) {
       const client = getSupabase();
       if (client) {
         const { error } = await client.from(table).delete().eq('id', id);
-        if (error) console.warn(`Supabase delete error for ${table}:`, error.message);
+        if (error) {
+          handleRlsViolation(table, 'delete', error);
+          console.warn(`Supabase delete error for ${table}:`, error.message);
+        }
       }
       getMemoryCollection(table).delete(id);
+      return { success: true };
+    },
+
+    async deleteMany(criteria = {}) {
+      const client = getSupabase();
+      if (client) {
+        if (criteria?.id && typeof criteria.id === 'object' && criteria.id.$in) {
+          await client.from(table).delete().in('id', criteria.id.$in);
+        } else if (criteria) {
+          let query = client.from(table).delete();
+          for (const [k, v] of Object.entries(criteria)) {
+            query = query.eq(k, v);
+          }
+          await query;
+        }
+      }
+      const coll = getMemoryCollection(table);
+      if (criteria?.id && typeof criteria.id === 'object' && criteria.id.$in) {
+        for (const id of criteria.id.$in) coll.delete(id);
+      } else if (criteria) {
+        for (const [id, item] of coll.entries()) {
+          const match = Object.entries(criteria).every(([k, v]) => String(item[k]) === String(v));
+          if (match) coll.delete(id);
+        }
+      }
       return { success: true };
     },
 
@@ -286,6 +393,7 @@ export function createEntityRepository(entityName) {
           data.forEach(d => getMemoryCollection(table).set(d.id, d));
           return data;
         }
+        handleRlsViolation(table, 'bulkCreate', error);
         console.warn(`Supabase bulkCreate fallback for ${table}:`, error?.message);
       }
 

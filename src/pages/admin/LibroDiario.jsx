@@ -12,10 +12,13 @@ import { formatCOP, formatDate } from "@/lib/contabilidad";
 import ComprobanteForm from "@/components/admin/ComprobanteForm";
 import EditarPeriodoMovimientoDialog from "@/components/admin/EditarPeriodoMovimientoDialog";
 import LibroDiarioImportExport from "@/components/admin/LibroDiarioImportExport";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function LibroDiario() {
   const [searchParams] = useSearchParams();
   const subcuentaFilter = searchParams.get("subcuenta");
+  const { can } = useAuth();
+  const canEditOrDelete = can('edit_delete_entries');
   const [comprobantes, setComprobantes] = useState([]);
   const [movimientos, setMovimientos] = useState([]);
   const [clientes, setClientes] = useState([]);
@@ -257,7 +260,7 @@ export default function LibroDiario() {
                 <SortTh k="debito" label="Débito" align="text-right" />
                 <SortTh k="credito" label="Crédito" align="text-right" />
                 <th className="px-4 py-3 font-medium text-center">Estado</th>
-                {user?.role === "admin" && <th className="px-4 py-3 font-medium"></th>}
+                {canEditOrDelete && <th className="px-4 py-3 font-medium text-right">Acciones</th>}
               </tr>
             </thead>
             <tbody>
@@ -285,10 +288,10 @@ export default function LibroDiario() {
                           {c.estado === "contabilizado" ? "Contab." : "Anulado"}
                         </Badge>
                       </td>
-                      {user?.role === "admin" && (
-                        <td className="px-4 py-2">
+                      {canEditOrDelete && (
+                        <td className="px-4 py-2 text-right">
                           {c.estado === "contabilizado" && (
-                            <div className="flex gap-1">
+                            <div className="flex gap-1 justify-end">
                               <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => {
                                 setEditingComp(c);
                                 setEditingMovs(movsByComprobante[c.id] || []);
@@ -306,7 +309,7 @@ export default function LibroDiario() {
                     </tr>
                     {isExpanded && (
                       <tr className="bg-muted/20">
-                        <td colSpan={user?.role === "admin" ? 9 : 8} className="px-12 py-3">
+                        <td colSpan={canEditOrDelete ? 9 : 8} className="px-12 py-3">
                           <table className="w-full text-xs">
                             <thead className="text-muted-foreground">
                               <tr className="text-left">

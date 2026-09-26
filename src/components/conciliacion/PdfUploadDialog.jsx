@@ -149,9 +149,26 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
       const url = uploadRes.file_url;
       setFileUrl(url);
 
+      // Convertir el archivo a base64 para análisis directo con IA multimodal
+      let fileBase64 = "";
+      try {
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        fileBase64 = btoa(binary);
+      } catch (convErr) {
+        console.warn("No se pudo convertir a base64:", convErr);
+      }
+
       // 2. Extraer datos con la función backend
       const resp = await base44.functions.invoke("procesarExtractoPDF", {
-        action: "extraer", file_url: url
+        action: "extraer",
+        file_url: url,
+        file_base64: fileBase64,
+        file_name: file.name
       });
       if (resp.data?.error) throw new Error(resp.data.error);
 

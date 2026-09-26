@@ -1,12 +1,14 @@
-import { Toaster } from "@/components/ui/toaster"
-import { QueryClientProvider } from '@tanstack/react-query'
-import { queryClientInstance } from '@/lib/query-client'
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import React from "react";
+import { Toaster } from "@/components/ui/toaster";
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClientInstance } from '@/lib/query-client';
+import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { ROLES } from '@/lib/userStore';
+import AccessDenied from '@/components/AccessDenied';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ScrollToTop from './components/ScrollToTop';
-import { Navigate } from "react-router-dom";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Login from "@/pages/Login";
@@ -27,35 +29,42 @@ import MetasTarjetas from "@/pages/admin/MetasTarjetas";
 import Clientes from "@/pages/admin/Clientes";
 import AlekeRooftop from "@/pages/admin/AlekeRooftop";
 import Pakredito from "@/pages/admin/Pakredito";
-import Emprendamos from "@/pages/admin/Emprendamos";
 import Conciliacion from "@/pages/admin/Conciliacion";
 import Asistente from "@/pages/admin/Asistente";
 import AuditoriaCuadre from "@/pages/admin/AuditoriaCuadre";
+import Usuarios from "@/pages/admin/Usuarios";
+
+const RoleGatedRoute = ({ allowedRoles, moduleName, children }) => {
+  const { user } = useAuth();
+  const userRole = user?.rol || ROLES.AUXILIAR;
+  if (!allowedRoles.includes(userRole)) {
+    return <AccessDenied moduleName={moduleName} requiredRoles={allowedRoles} />;
+  }
+  return children;
+};
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
 
-  // Show loading spinner while checking app public settings or auth
+  // Spinner mientras carga estado de autenticación
   if (isLoadingPublicSettings || isLoadingAuth) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+      <div className="fixed inset-0 flex items-center justify-center bg-background">
+        <div className="w-8 h-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin"></div>
       </div>
     );
   }
 
-  // Handle authentication errors
-  if (authError) {
+  // Errores de autenticación
+  if (authError && typeof authError === 'object') {
     if (authError.type === 'user_not_registered') {
       return <UserNotRegisteredError />;
     } else if (authError.type === 'auth_required') {
-      // Redirect to login automatically
       navigateToLogin();
       return null;
     }
   }
 
-  // Render the main app
   return (
     <ErrorBoundary>
       <Routes>
@@ -66,23 +75,84 @@ const AuthenticatedApp = () => {
         <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
           <Route element={<AdminLayout />}>
             <Route path="/" element={<Navigate to="/admin/contabilidad/resumen" replace />} />
+            
+            {/* Dashboard / Resumen (Todos los roles) */}
             <Route path="/admin/contabilidad/resumen" element={<Resumen />} />
-            <Route path="/admin/contabilidad/plan-cuentas" element={<PlanCuentas />} />
+            
+            {/* Libro Diario (Todos los roles - auxiliar no puede anular ni eliminar) */}
             <Route path="/admin/contabilidad/libro-diario" element={<LibroDiario />} />
-            <Route path="/admin/contabilidad/carga-masiva" element={<CargaMasiva />} />
-            <Route path="/admin/contabilidad/balance" element={<Balance />} />
-            <Route path="/admin/contabilidad/estados" element={<Estados />} />
-            <Route path="/admin/contabilidad/auditoria-cuadre" element={<AuditoriaCuadre />} />
+            
+            {/* Módulos Financieros (Administrador y Contador) */}
+            <Route 
+              path="/admin/contabilidad/plan-cuentas" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR]} moduleName="Plan de Cuentas">
+                  <PlanCuentas />
+                </RoleGatedRoute>
+              } 
+            />
+            <Route 
+              path="/admin/contabilidad/carga-masiva" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR]} moduleName="Carga Masiva">
+                  <CargaMasiva />
+                </RoleGatedRoute>
+              } 
+            />
+            <Route 
+              path="/admin/contabilidad/balance" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR]} moduleName="Balance General">
+                  <Balance />
+                </RoleGatedRoute>
+              } 
+            />
+            <Route 
+              path="/admin/contabilidad/estados" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR]} moduleName="Estados Financieros">
+                  <Estados />
+                </RoleGatedRoute>
+              } 
+            />
+            <Route 
+              path="/admin/contabilidad/auditoria-cuadre" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR]} moduleName="Auditoría de Cuadre">
+                  <AuditoriaCuadre />
+                </RoleGatedRoute>
+              } 
+            />
+            <Route 
+              path="/admin/financieros/metas-tarjetas" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR]} moduleName="Metas de Tarjetas">
+                  <MetasTarjetas />
+                </RoleGatedRoute>
+              } 
+            />
+
+            {/* Módulo de Gestión de Usuarios y Roles (Exclusivo Administrador) */}
+            <Route 
+              path="/admin/usuarios" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR]} moduleName="Gestión de Usuarios y Roles">
+                  <Usuarios />
+                </RoleGatedRoute>
+              } 
+            />
+
+            {/* Financieros & Operaciones (Todos los roles) */}
             <Route path="/admin/financieros/cuentas-ahorro" element={<CuentasAhorro />} />
             <Route path="/admin/financieros/tarjetas" element={<Tarjetas />} />
             <Route path="/admin/financieros/extractos" element={<Extractos />} />
-            <Route path="/admin/financieros/metas-tarjetas" element={<MetasTarjetas />} />
+            <Route path="/admin/conciliacion" element={<Conciliacion />} />
             <Route path="/admin/clientes" element={<Clientes />} />
+            <Route path="/admin/asistente" element={<Asistente />} />
+
+            {/* Líneas de Negocio (Todos los roles) */}
             <Route path="/admin/lineas/rooftop" element={<AlekeRooftop />} />
             <Route path="/admin/lineas/pakredito" element={<Pakredito />} />
-            <Route path="/admin/lineas/emprendamos" element={<Emprendamos />} />
-            <Route path="/admin/conciliacion" element={<Conciliacion />} />
-            <Route path="/admin/asistente" element={<Asistente />} />
           </Route>
         </Route>
         <Route path="*" element={<PageNotFound />} />
@@ -91,20 +161,18 @@ const AuthenticatedApp = () => {
   );
 };
 
-
 function App() {
-
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
-        <Router>
+        <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <ScrollToTop />
           <AuthenticatedApp />
         </Router>
         <Toaster />
       </QueryClientProvider>
     </AuthProvider>
-  )
+  );
 }
 
-export default App
+export default App;
