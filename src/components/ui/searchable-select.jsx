@@ -52,7 +52,7 @@ export default function SearchableSelect({
       <PopoverContent
         className={cn("p-0", popoverClassName)}
         align="start"
-        style={{ width: "var(--radix-popover-trigger-width)", minWidth: "280px" }}
+        style={{ width: "var(--radix-popover-trigger-width)", minWidth: "min(280px, 88vw)", maxWidth: "92vw" }}
       >
         <Command>
           <CommandInput placeholder={searchPlaceholder} className="h-9" />

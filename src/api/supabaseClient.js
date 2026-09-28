@@ -182,75 +182,136 @@ export function createEntityRepository(entityName) {
   const table = entityToTable(entityName);
 
   return {
-    async list(sort = null, limit = 5000) {
+    async list(sort = null, limit = 50000) {
       const client = getSupabase();
       let dbData = [];
       if (client) {
-        let query = client.from(table).select('*');
+        const targetLimit = limit ? Number(limit) : 50000;
+        let isDesc = false;
+        let col = null;
         if (sort) {
-          const isDesc = sort.startsWith('-');
-          const col = isDesc ? sort.slice(1) : sort;
-          query = query.order(col, { ascending: !isDesc });
+          isDesc = sort.startsWith('-');
+          col = isDesc ? sort.slice(1) : sort;
         }
-        if (limit) query = query.limit(limit);
-        const { data, error } = await query;
-        if (error) {
-          handleRlsViolation(table, 'list', error);
-          console.warn(`Supabase list error for ${table}:`, error.message);
-        } else if (Array.isArray(data)) {
-          dbData = data;
+
+        if (targetLimit <= 1000) {
+          let query = client.from(table).select('*');
+          if (col) query = query.order(col, { ascending: !isDesc });
+          query = query.limit(targetLimit);
+          const { data, error } = await query;
+          if (error) {
+            handleRlsViolation(table, 'list', error);
+            console.warn(`Supabase list error for ${table}:`, error.message);
+          } else if (Array.isArray(data)) {
+            dbData = data;
+          }
+        } else {
+          // Paginación por bloques para superar el límite de 1000 registros por query de PostgREST
+          const PAGE_SIZE = 1000;
+          let from = 0;
+          while (dbData.length < targetLimit) {
+            const to = from + Math.min(PAGE_SIZE, targetLimit - dbData.length) - 1;
+            let query = client.from(table).select('*');
+            if (col) query = query.order(col, { ascending: !isDesc });
+            query = query.range(from, to);
+            const { data, error } = await query;
+            if (error) {
+              handleRlsViolation(table, 'list', error);
+              console.warn(`Supabase list error for ${table}:`, error.message);
+              break;
+            }
+            if (!data || data.length === 0) break;
+            dbData.push(...data);
+            if (data.length < PAGE_SIZE) break;
+            from += data.length;
+          }
         }
       }
       const memItems = Array.from(getMemoryCollection(table).values());
       return deduplicateById([...dbData, ...memItems]);
     },
 
-    async filter(criteria = {}, sort = null, limit = 5000) {
+    async filter(criteria = {}, sort = null, limit = 50000) {
       const client = getSupabase();
       if (client) {
-        let query = client.from(table).select('*');
-        for (const [key, val] of Object.entries(criteria || {})) {
-          if (val !== undefined && val !== null) {
-            if (typeof val === 'object' && !Array.isArray(val)) {
-              if (val.$in && Array.isArray(val.$in)) query = query.in(key, val.$in);
-              if (val.$gte !== undefined) query = query.gte(key, val.$gte);
-              if (val.$lte !== undefined) query = query.lte(key, val.$lte);
-              if (val.$gt !== undefined) query = query.gt(key, val.$gt);
-              if (val.$lt !== undefined) query = query.lt(key, val.$lt);
-              if (val.$neq !== undefined) query = query.neq(key, val.$neq);
-            } else {
-              query = query.eq(key, val);
+        const targetLimit = limit ? Number(limit) : 50000;
+        let isDesc = false;
+        let col = null;
+        if (sort) {
+          isDesc = sort.startsWith('-');
+          col = isDesc ? sort.slice(1) : sort;
+        }
+
+        const applyCriteria = (q) => {
+          for (const [key, val] of Object.entries(criteria || {})) {
+            if (val !== undefined && val !== null) {
+              if (typeof val === 'object' && !Array.isArray(val)) {
+                if (val.$in && Array.isArray(val.$in)) q = q.in(key, val.$in);
+                if (val.$gte !== undefined) q = q.gte(key, val.$gte);
+                if (val.$lte !== undefined) q = q.lte(key, val.$lte);
+                if (val.$gt !== undefined) q = q.gt(key, val.$gt);
+                if (val.$lt !== undefined) q = q.lt(key, val.$lt);
+                if (val.$neq !== undefined) q = q.neq(key, val.$neq);
+              } else {
+                q = q.eq(key, val);
+              }
             }
           }
+          if (col) q = q.order(col, { ascending: !isDesc });
+          return q;
+        };
+
+        let dbData = [];
+        if (targetLimit <= 1000) {
+          let query = applyCriteria(client.from(table).select('*'));
+          query = query.limit(targetLimit);
+          const { data, error } = await query;
+          if (error) {
+            console.warn(`Supabase filter error for ${table}:`, error.message);
+          } else if (Array.isArray(data)) {
+            dbData = data;
+          }
+        } else {
+          // Paginación por bloques para superar el límite de 1000 registros por query de PostgREST
+          const PAGE_SIZE = 1000;
+          let from = 0;
+          while (dbData.length < targetLimit) {
+            const to = from + Math.min(PAGE_SIZE, targetLimit - dbData.length) - 1;
+            let query = applyCriteria(client.from(table).select('*'));
+            query = query.range(from, to);
+            const { data, error } = await query;
+            if (error) {
+              console.warn(`Supabase filter error for ${table}:`, error.message);
+              break;
+            }
+            if (!data || data.length === 0) break;
+            dbData.push(...data);
+            if (data.length < PAGE_SIZE) break;
+            from += data.length;
+          }
         }
-        if (sort) {
-          const isDesc = sort.startsWith('-');
-          const col = isDesc ? sort.slice(1) : sort;
-          query = query.order(col, { ascending: !isDesc });
+
+        if (dbData.length > 0) {
+          return deduplicateById(dbData);
         }
-        if (limit) query = query.limit(limit);
-        const { data, error } = await query;
-        if (error) {
-          console.warn(`Supabase filter error for ${table}:`, error.message);
-          // Fallback to memory filter
-          const all = Array.from(getMemoryCollection(table).values());
-          const filtered = all.filter(item => {
-            return Object.entries(criteria || {}).every(([k, v]) => {
-              if (v === undefined || v === null) return true;
-              if (typeof v === 'object' && !Array.isArray(v)) {
-                if (v.$in && Array.isArray(v.$in)) return v.$in.map(String).includes(String(item[k]));
-                if (v.$gte !== undefined) return item[k] >= v.$gte;
-                if (v.$lte !== undefined) return item[k] <= v.$lte;
-                if (v.$gt !== undefined) return item[k] > v.$gt;
-                if (v.$lt !== undefined) return item[k] < v.$lt;
-                if (v.$neq !== undefined) return String(item[k]) !== String(v.$neq);
-              }
-              return String(item[k]) === String(v);
-            });
+
+        // Fallback to memory filter if empty or error
+        const all = Array.from(getMemoryCollection(table).values());
+        const filtered = all.filter(item => {
+          return Object.entries(criteria || {}).every(([k, v]) => {
+            if (v === undefined || v === null) return true;
+            if (typeof v === 'object' && !Array.isArray(v)) {
+              if (v.$in && Array.isArray(v.$in)) return v.$in.map(String).includes(String(item[k]));
+              if (v.$gte !== undefined) return item[k] >= v.$gte;
+              if (v.$lte !== undefined) return item[k] <= v.$lte;
+              if (v.$gt !== undefined) return item[k] > v.$gt;
+              if (v.$lt !== undefined) return item[k] < v.$lt;
+              if (v.$neq !== undefined) return String(item[k]) !== String(v.$neq);
+            }
+            return String(item[k]) === String(v);
           });
-          return deduplicateById(filtered);
-        }
-        return deduplicateById(data || []);
+        });
+        return deduplicateById(filtered);
       }
 
       // Memory filter fallback

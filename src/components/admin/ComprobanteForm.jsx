@@ -207,9 +207,9 @@ export default function ComprobanteForm({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="w-[95vw] sm:max-w-5xl max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
             {editing ? (
               <><ArrowRightLeft className="w-5 h-5 text-primary" /> Modificar Comprobante {editing.numero}</>
             ) : (
@@ -219,12 +219,12 @@ export default function ComprobanteForm({
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Modo + encabezado */}
-          <div className="grid grid-cols-4 gap-3">
+          {/* Modo + encabezado adaptable */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
-              <Label>Modo de Registro *</Label>
+              <Label className="text-xs">Modo de Registro *</Label>
               <Select value={modo} onValueChange={(v) => { setModo(v); setConfirmarSobregiro(false); }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="balance">Balance</SelectItem>
                   <SelectItem value="resultado">Gastos e Ingresos</SelectItem>
@@ -232,13 +232,13 @@ export default function ComprobanteForm({
               </Select>
             </div>
             <div>
-              <Label>Fecha *</Label>
-              <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+              <Label className="text-xs">Fecha *</Label>
+              <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="h-9 text-xs" />
             </div>
             <div>
-              <Label>Tipo</Label>
+              <Label className="text-xs">Tipo</Label>
               <Select value={tipo} onValueChange={setTipo}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="diario">Diario</SelectItem>
                   <SelectItem value="ingreso">Ingreso</SelectItem>
@@ -249,9 +249,9 @@ export default function ComprobanteForm({
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>Nota / Concepto *</Label>
-              <Input value={descripcion} onChange={(e) => setDescripcion(e.target.value)} placeholder="Concepto del asiento" />
+            <div className="sm:col-span-2 lg:col-span-1">
+              <Label className="text-xs">Nota / Concepto *</Label>
+              <Input value={descripcion} onChange={(e) => setDescripcion(e.target.value)} placeholder="Concepto del asiento" className="h-9 text-xs" />
             </div>
           </div>
 
@@ -266,14 +266,16 @@ export default function ComprobanteForm({
             </div>
           )}
 
-          {/* Tabla de movimientos */}
+          {/* Tabla de movimientos adaptable */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Movimientos del Asiento</Label>
-              <Button size="sm" variant="outline" onClick={addMov} type="button"><Plus className="w-4 h-4 mr-1" /> Agregar línea</Button>
+              <Label className="text-xs font-semibold">Movimientos del Asiento</Label>
+              <Button size="sm" variant="outline" onClick={addMov} type="button" className="text-xs h-8">
+                <Plus className="w-3.5 h-3.5 mr-1" /> Agregar línea
+              </Button>
             </div>
-            <div className="border border-border rounded-lg overflow-hidden">
-              <table className="w-full text-xs">
+            <div className="border border-border rounded-lg overflow-x-auto w-full">
+              <table className="min-w-[660px] w-full text-xs">
                 <thead className="bg-muted/50 border-b border-border">
                   <tr className="text-left text-muted-foreground uppercase">
                     <th className="px-2 py-2 font-medium w-[26%]">Cuenta PUC</th>
@@ -389,9 +391,11 @@ export default function ComprobanteForm({
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving}>
+        <DialogFooter className="flex-col sm:flex-row gap-2 mt-4 pt-3 border-t border-border">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="w-full sm:w-auto order-2 sm:order-1">
+            Cancelar
+          </Button>
+          <Button onClick={handleSubmit} disabled={saving} className="w-full sm:w-auto order-1 sm:order-2">
             {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
             {editing ? "Guardar Modificación" : confirmarSobregiro ? "Confirmar y Guardar" : "Guardar Comprobante"}
           </Button>

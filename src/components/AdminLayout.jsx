@@ -25,7 +25,9 @@ import {
   ShieldCheck,
   UserCheck,
   LogOut,
-  UserCog
+  UserCog,
+  Menu,
+  X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -76,6 +78,7 @@ const allNavGroups = [
 
 export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [supabaseOpen, setSupabaseOpen] = useState(false);
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
@@ -84,6 +87,20 @@ export default function AdminLayout() {
 
   const userRole = user?.rol || ROLES.AUXILIAR;
   const roleConfig = ROLE_INFO[userRole] || { label: userRole, badgeClass: '' };
+
+  // Cerrar menú móvil al cambiar de ruta
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  // Cerrar menú móvil con tecla Escape
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") setMobileMenuOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   // Filtrar grupos y enlaces según los permisos del rol activo
   const filteredNavGroups = allNavGroups
@@ -120,14 +137,120 @@ export default function AdminLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
-      {/* SIDEBAR */}
+      {/* MENÚ MÓVIL DESPLEGABLE (OVERLAY + DRAWER) */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 md:hidden transition-opacity"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <aside
         className={cn(
-          "flex flex-col border-r border-border bg-sidebar transition-all duration-200 shrink-0",
+          "fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-sidebar border-r border-border shadow-2xl flex flex-col transition-transform duration-300 ease-in-out md:hidden",
+          mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+        aria-label="Navegación de módulos"
+      >
+        {/* ENCABEZADO MENÚ MÓVIL */}
+        <div className="flex items-center justify-between px-4 h-16 border-b border-border shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center shrink-0">
+              <Building2 className="w-5 h-5 text-primary-foreground" />
+            </div>
+            <div className="leading-tight overflow-hidden">
+              <div className="font-heading font-semibold text-sm">Aleke System</div>
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Contable & Financiero</div>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setMobileMenuOpen(false)}
+            className="h-9 w-9 text-muted-foreground hover:text-foreground"
+            aria-label="Cerrar menú"
+          >
+            <X className="w-5 h-5" />
+          </Button>
+        </div>
+
+        {/* PERFIL ACTIVO EN MENÚ MÓVIL */}
+        {user && (
+          <div className="px-3 py-2.5 mx-3 my-2.5 rounded-lg bg-card/60 border border-border flex items-center justify-between text-xs shrink-0">
+            <div className="overflow-hidden">
+              <div className="font-semibold text-foreground truncate">{user.nombre || user.username}</div>
+              <div className="text-[10px] text-muted-foreground font-mono truncate">@{user.username}</div>
+            </div>
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0 ${roleConfig.badgeClass}`}>
+              {roleConfig.label}
+            </span>
+          </div>
+        )}
+
+        {/* ENLACES DE MÓDULOS MÓVIL */}
+        <nav className="flex-1 overflow-y-auto py-2 px-3 space-y-1">
+          {filteredNavGroups.map((group) => {
+            const isOpen = expandedGroups[group.label] !== false;
+            return (
+              <div key={`mob-${group.label}`} className="mb-2">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.label)}
+                  className="w-full flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <span>{group.label}</span>
+                  <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", isOpen && "rotate-180")} />
+                </button>
+                {isOpen && (
+                  <div className="space-y-0.5 mt-0.5">
+                    {group.items.map((item) => (
+                      <NavLink
+                        key={`mob-link-${item.to}`}
+                        to={item.to}
+                        onClick={() => setMobileMenuOpen(false)}
+                        className={({ isActive }) =>
+                          cn(
+                            "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors",
+                            isActive
+                              ? "bg-primary/15 text-primary font-medium"
+                              : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                          )
+                        }
+                      >
+                        <item.icon className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </nav>
+
+        {/* PIE DE MENÚ MÓVIL */}
+        <div className="border-t border-border p-3 shrink-0 space-y-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLogout}
+            className="w-full text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 justify-start gap-2 h-10"
+          >
+            <LogOut className="w-4 h-4 shrink-0" />
+            <span>Cerrar sesión</span>
+          </Button>
+        </div>
+      </aside>
+
+      {/* SIDEBAR DESKTOP (solo visible en pantallas md en adelante) */}
+      <aside
+        className={cn(
+          "hidden md:flex flex-col border-r border-border bg-sidebar transition-all duration-200 shrink-0",
           collapsed ? "w-[68px]" : "w-60"
         )}
       >
-        {/* LOGO */}
+        {/* LOGO DESKTOP */}
         <div className="flex items-center gap-3 px-4 h-16 border-b border-border shrink-0">
           <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center shrink-0">
             <Building2 className="w-5 h-5 text-primary-foreground" />
@@ -223,12 +346,26 @@ export default function AdminLayout() {
 
       {/* MAIN CONTENT AREA */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* TOPBAR */}
-        <header className="h-16 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-6 shrink-0">
-          <div className="flex items-center gap-3">
-            <h1 className="font-heading font-semibold text-lg">{currentTitle}</h1>
+        {/* TOPBAR RESPONSIVA */}
+        <header className="h-16 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-3 sm:px-6 shrink-0 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Botón hamburguesa para dispositivos móviles */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setMobileMenuOpen(true)}
+              className="md:hidden h-9 w-9 text-foreground hover:bg-muted shrink-0"
+              aria-label="Abrir menú de módulos"
+              title="Módulos del sistema"
+            >
+              <Menu className="w-5 h-5" />
+            </Button>
+
+            <h1 className="font-heading font-semibold text-base sm:text-lg truncate max-w-[200px] sm:max-w-none">
+              {currentTitle}
+            </h1>
             {user && (
-              <span className={`hidden sm:inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${roleConfig.badgeClass}`}>
+              <span className={`hidden lg:inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full border shrink-0 ${roleConfig.badgeClass}`}>
                 {user.rol === ROLES.ADMINISTRADOR && <ShieldCheck className="w-3.5 h-3.5" />}
                 {user.rol === ROLES.CONTADOR && <UserCheck className="w-3.5 h-3.5" />}
                 {user.rol === ROLES.AUXILIAR && <Users className="w-3.5 h-3.5" />}
@@ -237,14 +374,14 @@ export default function AdminLayout() {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             {/* Supabase Button: Solo visible y ejecutable por el ADMINISTRADOR */}
             {user?.rol === ROLES.ADMINISTRADOR && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setSupabaseOpen(true)}
-                className="gap-1.5 border-emerald-600/30 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                className="gap-1.5 border-emerald-600/30 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 h-8 sm:h-9 px-2 sm:px-3 text-xs"
                 title="Configuración y conexión a Supabase (Acceso exclusivo Administrador)"
               >
                 <Database className="w-4 h-4 text-emerald-500" />
