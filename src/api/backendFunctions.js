@@ -899,7 +899,22 @@ export async function procesarExtractoPDF(entities, payload = {}) {
     const fechaCorteAnterior = normalizeDate(data.fecha_corte_anterior) || "";
     const periodo = data.periodo ? String(data.periodo).substring(0, 7) : (fechaCorte ? fechaCorte.substring(0, 7) : "");
 
-    const last4 = String(data.numero_tarjeta || "").replace(/\D/g, "").slice(-4);
+    // Detección robusta del número completo y los últimos 4 dígitos
+    const numTarjetaRaw = String(data.numero_tarjeta || data.numero_producto || data.numero_obligacion || "").trim();
+    let last4 = "";
+    if (data.ultimos_4_digitos && String(data.ultimos_4_digitos).replace(/\D/g, "").length === 4) {
+      last4 = String(data.ultimos_4_digitos).replace(/\D/g, "");
+    } else {
+      const allDigits = numTarjetaRaw.replace(/\D/g, "");
+      if (allDigits.length >= 4) {
+        last4 = allDigits.slice(-4);
+      } else {
+        const matchDigits = numTarjetaRaw.match(/\b\d{4}\b/g);
+        if (matchDigits && matchDigits.length > 0) {
+          last4 = matchDigits[matchDigits.length - 1];
+        }
+      }
+    }
 
     // Sanitizar y redondear movimientos a máx 2 decimales (pesos colombianos)
     const movimientos = (data.movimientos || [])
@@ -964,20 +979,99 @@ export async function procesarExtractoPDF(entities, payload = {}) {
       }
     }
 
-    // Match con productos de crédito activos
+    // Match inteligente con productos de crédito y cuentas activas
     const productos = await entities.ProductoCredito.list();
     const productosActivos = (productos || []).filter((p) => p.estado === "activo");
 
-    let productoMatch = null;
-    if (banco.code && last4) {
-      productoMatch = productosActivos.find((p) =>
-        p.banco === banco.code && String(p.nomenclatura || "").replace(/\D/g, "").endsWith(last4)
-      );
+    let cuentasPuc = [];
+    try {
+      cuentasPuc = await entities.Cuenta.list();
+    } catch {
+      cuentasPuc = [];
     }
-    if (!productoMatch && last4) {
-      productoMatch = productosActivos.find((p) =>
-        String(p.nomenclatura || "").replace(/\D/g, "").endsWith(last4)
-      );
+
+    let productoMatch = null;
+    let matchReason = "";
+
+    if (last4) {
+      const regexLast4 = new RegExp(`(?:^|\\D)${last4}(?:\\D|$)`);
+      const normCard = numTarjetaRaw.replace(/\D/g, "");
+
+      // 1. Coincidencia por número completo o enmascarado si existe en numero_completo
+      if (normCard.length >= 8) {
+        const porNumeroCompleto = productosActivos.find((p) => {
+          const pnc = String(p.numero_completo || "").replace(/\D/g, "");
+          return pnc && (pnc === normCard || normCard.endsWith(pnc) || pnc.endsWith(normCard));
+        });
+        if (porNumeroCompleto) {
+          productoMatch = porNumeroCompleto;
+          matchReason = `Número completo coincidente (${numTarjetaRaw})`;
+        }
+      }
+
+      // 2. Coincidencia directa por nombre canónico de cuenta/tarjeta (ej: "TDC - 5513", "TDC-5513", "TDC 5513")
+      if (!productoMatch) {
+        const porNombreCanonico = productosActivos.find((p) => {
+          const pNom = String(p.nombre || "").trim().toLowerCase();
+          return (
+            pNom === `tdc - ${last4}`.toLowerCase() ||
+            pNom === `tdc-${last4}`.toLowerCase() ||
+            pNom === `tdc ${last4}`.toLowerCase()
+          );
+        });
+        if (porNombreCanonico) {
+          productoMatch = porNombreCanonico;
+          matchReason = `Coincidencia por nombre '${porNombreCanonico.nombre}'`;
+        }
+      }
+
+      // 3. Coincidencia por banco + nombre o nomenclatura que contenga los 4 dígitos
+      if (!productoMatch && banco.code) {
+        const porBancoYDigitos = productosActivos.find((p) =>
+          p.banco === banco.code && (
+            regexLast4.test(p.nombre || "") ||
+            regexLast4.test(p.nomenclatura || "") ||
+            String(p.nomenclatura || "").replace(/\D/g, "").endsWith(last4) ||
+            String(p.numero_completo || "").replace(/\D/g, "").endsWith(last4)
+          )
+        );
+        if (porBancoYDigitos) {
+          productoMatch = porBancoYDigitos;
+          matchReason = `Banco (${banco.name || banco.code}) y terminación ${last4}`;
+        }
+      }
+
+      // 4. Coincidencia por nombre o nomenclatura en cualquier producto activo
+      if (!productoMatch) {
+        const porCualquierNombre = productosActivos.find((p) =>
+          regexLast4.test(p.nombre || "") ||
+          regexLast4.test(p.nomenclatura || "") ||
+          String(p.nomenclatura || "").replace(/\D/g, "").endsWith(last4) ||
+          String(p.numero_completo || "").replace(/\D/g, "").endsWith(last4) ||
+          (p.codigo_interno && regexLast4.test(p.codigo_interno))
+        );
+        if (porCualquierNombre) {
+          productoMatch = porCualquierNombre;
+          matchReason = `Coincidencia de 4 dígitos (${last4}) con '${porCualquierNombre.nombre}'`;
+        }
+      }
+
+      // 5. Coincidencia a través de Cuenta contable PUC (ej: cuenta con concepto "TDC - 5513")
+      if (!productoMatch && cuentasPuc.length > 0) {
+        const cuentaPuc = cuentasPuc.find((c) =>
+          regexLast4.test(c.concepto || "") ||
+          String(c.concepto || "").toLowerCase().includes(`tdc - ${last4}`.toLowerCase())
+        );
+        if (cuentaPuc) {
+          const porPuc = productosActivos.find((p) =>
+            String(p.subcuenta_puc) === String(cuentaPuc.codigo)
+          );
+          if (porPuc) {
+            productoMatch = porPuc;
+            matchReason = `Vinculado vía cuenta PUC '${cuentaPuc.concepto}'`;
+          }
+        }
+      }
     }
 
     const totalCargos = parseAndRoundCOP(
@@ -992,7 +1086,7 @@ export async function procesarExtractoPDF(entities, payload = {}) {
     return {
       banco_detectado: banco,
       cargos_categorizados: cargosCategorizados,
-      tarjeta: data.numero_tarjeta || (last4 ? `****${last4}` : "No identificada"),
+      tarjeta: numTarjetaRaw || (last4 ? `****${last4}` : "No identificada"),
       last4,
       titular: data.titular || "Titular de tarjeta",
       periodo,
@@ -1011,7 +1105,8 @@ export async function procesarExtractoPDF(entities, payload = {}) {
         id: productoMatch.id,
         nombre: productoMatch.nombre,
         banco: productoMatch.banco,
-        nomenclatura: productoMatch.nomenclatura
+        nomenclatura: productoMatch.nomenclatura,
+        match_reason: matchReason
       } : null,
       productos_disponibles: productosActivos.map((p) => ({
         id: p.id,

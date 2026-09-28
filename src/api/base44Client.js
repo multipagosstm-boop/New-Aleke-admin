@@ -5,6 +5,15 @@ import { GoogleGenAI } from '@google/genai';
 export { getSupabase };
 
 // Implementation of Core integration (LLM and File Upload)
+function normalizeModel(m) {
+  if (!m) return 'gemini-3.8-flash';
+  const clean = String(m).toLowerCase().replace(/_/g, '-');
+  if (clean === 'gemini-3-flash' || clean === 'gemini-flash' || clean === 'gemini-flash-latest') return 'gemini-flash-latest';
+  if (clean.includes('3.8')) return 'gemini-3.8-flash';
+  if (clean.includes('lite')) return 'gemini-3.1-flash-lite';
+  return 'gemini-3.8-flash';
+}
+
 async function invokeLLM({ prompt, model = 'gemini-3.8-flash', response_json_schema } = {}) {
   try {
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') || '';
@@ -17,11 +26,21 @@ async function invokeLLM({ prompt, model = 'gemini-3.8-flash', response_json_sch
         config.responseMimeType = 'application/json';
         config.responseSchema = response_json_schema;
       }
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config
-      });
+      const primary = normalizeModel(model);
+      const candidateModels = [primary, 'gemini-flash-latest', 'gemini-3.1-flash-lite'].filter((m, i, arr) => arr.indexOf(m) === i);
+      let response = null;
+      for (const m of candidateModels) {
+        try {
+          response = await ai.models.generateContent({
+            model: m,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            config
+          });
+          if (response?.text) break;
+        } catch (mErr) {
+          console.warn(`[InvokeLLM] Falló modelo ${m}:`, mErr?.message || mErr);
+        }
+      }
       const text = response.text || '';
       if (response_json_schema) {
         try {

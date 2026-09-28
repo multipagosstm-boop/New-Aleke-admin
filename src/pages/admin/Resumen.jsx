@@ -33,7 +33,7 @@ export default function Resumen() {
     base44.integrations.Core.InvokeLLM({
       prompt: "¿Cuál es la TRM (Tasa Representativa del Mercado) del dólar en Colombia para hoy? Indica el valor en pesos colombianos por cada dólar USD.",
       add_context_from_internet: true,
-      model: "gemini_3_flash",
+      model: "gemini-3.8-flash",
       response_json_schema: {
         type: "object",
         properties: {

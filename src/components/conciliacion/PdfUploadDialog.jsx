@@ -64,11 +64,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
     setShowTarjetaForm(false);
     const prods = await refreshProductos();
     // Seleccionar automáticamente el producto recién creado que coincide con el PDF
-    const match = prods.find((p) =>
-      esCredito
-        ? ["CH", "LIB", "CR"].includes(p.tipo) && coincideProducto(p)
-        : String(p.nomenclatura || "").replace(/\D/g, "").endsWith(extracted?.last4 || "")
-    );
+    const match = prods.find((p) => coincideProducto(p));
     if (match) setProductoSel(match.id);
   };
 
@@ -81,7 +77,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
     esCredito ? ["CH", "LIB", "CR"].includes(p.tipo) : true
   );
 
-  // Coincidencia del producto: por número de obligación (crédito) o últimos 4 (TDC)
+  // Coincidencia del producto: por número de tarjeta/nombre de cuenta o últimos 4 (TDC) o número de obligación (crédito)
   const coincideProducto = (p) => {
     if (!p) return false;
     if (esCredito) {
@@ -94,7 +90,27 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
              (ci && (ci.endsWith(obl) || obl.endsWith(ci)));
     }
     const last4 = extracted?.last4;
-    return !!last4 && String(p.nomenclatura || "").replace(/\D/g, "").endsWith(last4);
+    if (!last4) return false;
+    const regex = new RegExp(`(?:^|\\D)${last4}(?:\\D|$)`);
+    const numRaw = String(extracted?.tarjeta || "").replace(/\D/g, "");
+
+    // 1. Coincidencia por número completo si está registrado
+    if (numRaw.length >= 8 && p.numero_completo) {
+      const pnc = String(p.numero_completo).replace(/\D/g, "");
+      if (pnc && (pnc === numRaw || numRaw.endsWith(pnc) || pnc.endsWith(numRaw))) return true;
+    }
+
+    // 2. Coincidencia con nombre de cuenta/tarjeta (ej: "TDC - 5513", "TDC-5513", "TDC 5513")
+    if (regex.test(p.nombre || "")) return true;
+
+    // 3. Coincidencia con nomenclatura
+    if (regex.test(p.nomenclatura || "") || String(p.nomenclatura || "").replace(/\D/g, "").endsWith(last4)) return true;
+
+    // 4. Coincidencia con terminación de numero_completo o codigo_interno
+    if (p.numero_completo && String(p.numero_completo).replace(/\D/g, "").endsWith(last4)) return true;
+    if (p.codigo_interno && regex.test(p.codigo_interno)) return true;
+
+    return false;
   };
 
   useEffect(() => {
@@ -116,9 +132,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
   const handleReemplazoDone = async () => {
     setShowReemplazo(false);
     const prods = await refreshProductos();
-    const match = prods.find((p) =>
-      String(p.nomenclatura || "").replace(/\D/g, "").endsWith(extracted?.last4 || "")
-    );
+    const match = prods.find((p) => coincideProducto(p));
     if (match) setProductoSel(match.id);
   };
 
@@ -190,7 +204,22 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
       setCargosDestino(initDestino);
       setStep("preview");
     } catch (e) {
-      setError(e.message);
+      let msg = e.message || String(e || '');
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed?.error) {
+          if (parsed.error.code === 503 || parsed.error.status === 'UNAVAILABLE' || String(parsed.error.message).includes('high demand')) {
+            msg = 'Los servidores de Google Gemini están experimentando alta demanda momentánea (Error 503 temporal). Por favor espera unos segundos y presiona "Procesar extracto" nuevamente.';
+          } else if (parsed.error.code === 429) {
+            msg = 'Límite de peticiones de Google Gemini alcanzado temporalmente (Error 429). Espera un minuto antes de reintentar.';
+          } else if (parsed.error.message) {
+            msg = parsed.error.message;
+          }
+        }
+      } catch {
+        // no es JSON
+      }
+      setError(msg);
       setStep("upload");
     }
   };
@@ -364,12 +393,22 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
             <div className="space-y-2 rounded-md border border-border p-3 bg-muted/20">
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-semibold">{esCredito ? "Crédito / Producto a asignar" : "Tarjeta / Producto a asignar"}</Label>
-                {(esCredito ? extracted.numero_obligacion : extracted.last4) && (
+                {(esCredito ? extracted.numero_obligacion : (extracted.tarjeta || extracted.last4)) && (
                   <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                    PDF detectó: {esCredito ? extracted.numero_obligacion : `****${extracted.last4}`}
+                    PDF detectó: {esCredito ? extracted.numero_obligacion : (extracted.tarjeta && extracted.tarjeta.length > 4 ? extracted.tarjeta : `****${extracted.last4}`)}
                   </span>
                 )}
               </div>
+
+              {/* Confirmación visual de match automático con la cuenta */}
+              {extracted.producto_match && productoSel === extracted.producto_match.id && (
+                <div className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded p-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <span>
+                    Vinculado automáticamente a la cuenta: <strong>{extracted.producto_match.nombre}</strong> {extracted.producto_match.match_reason ? `(${extracted.producto_match.match_reason})` : `(coincidencia ${extracted.last4})`}
+                  </span>
+                </div>
+              )}
 
               {/* Alerta si no hubo match automático */}
               {!extracted.producto_match && (
@@ -378,13 +417,13 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
                   <span>
                     {esCredito
                       ? <>No se encontró un crédito con obligación <span className="font-mono font-bold">{extracted.numero_obligacion || "?"}</span> en el sistema. Selecciona manualmente el producto correcto.</>
-                      : <>No se encontró una tarjeta con terminación <span className="font-mono font-bold">****{extracted.last4 || "?"}</span> en el sistema. Selecciona manualmente el producto correcto.</>}
+                      : <>No se encontró una tarjeta o cuenta con terminación <span className="font-mono font-bold">****{extracted.last4 || "?"}</span> en el sistema. Selecciona manualmente el producto correcto o créala con "+ Crear".</>}
                   </span>
                 </div>
               )}
 
-              {/* Alerta si el match automático NO coincide con el dato del PDF */}
-              {extracted.producto_match && productoSel && (() => {
+              {/* Alerta si el producto seleccionado NO coincide con el dato del PDF */}
+              {productoSel && (() => {
                 const prod = productosFiltrados.find((p) => p.id === productoSel);
                 return !coincideProducto(prod);
               })() && (
@@ -393,7 +432,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
                   <span>
                     {esCredito
                       ? <>El producto seleccionado no coincide con la obligación del PDF. Verifica que sea el correcto.</>
-                      : <>El producto seleccionado no termina en <span className="font-mono font-bold">****{extracted.last4}</span>. Verifica que sea el correcto.</>}
+                      : <>El producto seleccionado no coincide con la tarjeta <span className="font-mono font-bold">{extracted.tarjeta || `****${extracted.last4}`}</span> detectada en el PDF. Verifica que sea el correcto.</>}
                   </span>
                 </div>
               )}

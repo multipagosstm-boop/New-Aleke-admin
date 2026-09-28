@@ -37,18 +37,31 @@ export async function askAlekeAssistant({ message, conversationHistory = [], ima
     parts: currentParts
   });
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents,
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        temperature: 0.3
+  const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  let lastError = null;
+
+  for (const model of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          temperature: 0.3
+        }
+      });
+      if (response?.text) {
+        return response.text;
       }
-    });
-    return response.text || 'No se obtuvo respuesta del asistente.';
-  } catch (error) {
-    console.error('Gemini error:', error);
-    return `Error al consultar con Gemini: ${error.message}`;
+    } catch (error) {
+      lastError = error;
+      console.warn(`[Asistente] Falló con modelo ${model}:`, error?.message || error);
+    }
   }
+
+  const errMsg = lastError?.message || String(lastError || '');
+  if (errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('UNAVAILABLE')) {
+    return 'Google Gemini está experimentando alta demanda en este momento (Error 503 temporal). Por favor intenta de nuevo en unos segundos.';
+  }
+  return `Error al consultar con Gemini: ${errMsg}`;
 }

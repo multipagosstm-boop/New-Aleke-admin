@@ -237,7 +237,8 @@ REGLAS DE MOVIMIENTOS:
 Devuelve UNICAMENTE un objeto JSON válido con este esquema:
 {
   "banco": "Nombre del banco (Bancolombia, BBVA, Bogotá, Davivienda, etc.)",
-  "numero_tarjeta": "Número de tarjeta o últimos 4 dígitos visibles",
+  "numero_tarjeta": "Número completo o enmascarado del producto o tarjeta (ej: XXXX-XXXX-XXXX-5513, ****-5513, o últimos dígitos visibles)",
+  "ultimos_4_digitos": "Últimos 4 dígitos del producto o tarjeta (ej: 5513)",
   "titular": "Nombre completo del titular",
   "periodo": "YYYY-MM del extracto (ej: 2026-09)",
   "fecha_corte": "YYYY-MM-DD",
@@ -280,16 +281,101 @@ Devuelve UNICAMENTE un objeto JSON válido con este esquema:
     }
   ];
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
-    contents,
-    config: {
-      temperature: 0.1,
-      responseMimeType: 'application/json'
+  // Modelos candidatos en orden de preferencia (todos admiten PDF multimodal y JSON)
+  const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  let lastError = null;
+  let response = null;
+
+  for (const model of candidateModels) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        response = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            temperature: 0.1,
+            responseMimeType: 'application/json'
+          }
+        });
+        if (response?.text) break;
+      } catch (err) {
+        lastError = err;
+        const errMsg = String(err?.message || err || '');
+        const isTemporary =
+          errMsg.includes('503') ||
+          errMsg.includes('high demand') ||
+          errMsg.includes('UNAVAILABLE') ||
+          errMsg.includes('temporarily') ||
+          errMsg.includes('429') ||
+          errMsg.includes('RESOURCE_EXHAUSTED');
+
+        console.warn(`[Gemini] Intento con modelo ${model} (intento ${attempt}) falló:`, errMsg);
+
+        if (isTemporary && attempt === 1) {
+          // Esperar 1.5s antes de reintentar el mismo modelo
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        // Si no es temporal o ya es el 2do intento, pasar al siguiente modelo
+        break;
+      }
     }
-  });
+    if (response?.text) break;
+  }
+
+  if (!response?.text) {
+    throw parseAndHumanizeGeminiError(lastError);
+  }
 
   const rawText = response.text || '{}';
   const cleanJson = rawText.replace(/```json\n?|```/g, '').trim();
   return JSON.parse(cleanJson);
 }
+
+/**
+ * Convierte errores técnicos de Google Gemini (como 503 High Demand o 429) en mensajes comprensibles.
+ */
+function parseAndHumanizeGeminiError(err) {
+  const rawMsg = err?.message || String(err || '');
+  let code = null;
+  let status = null;
+
+  try {
+    const parsed = JSON.parse(rawMsg);
+    if (parsed.error) {
+      code = parsed.error.code;
+      status = parsed.error.status;
+    }
+  } catch {
+    // rawMsg no es JSON
+  }
+
+  if (code === 503 || rawMsg.includes('503') || rawMsg.includes('high demand') || status === 'UNAVAILABLE') {
+    return new Error(
+      'Los servidores de Google Gemini están experimentando alta demanda en este momento (Error 503 temporal). ' +
+      'Por favor espera unos 10 segundos y vuelve a presionar "Procesar extracto".'
+    );
+  }
+
+  if (code === 429 || rawMsg.includes('429') || rawMsg.includes('RESOURCE_EXHAUSTED') || rawMsg.includes('quota')) {
+    return new Error(
+      'Se alcanzó temporalmente el límite de peticiones de Google Gemini (Error 429). ' +
+      'Por favor espera un minuto antes de reintentar.'
+    );
+  }
+
+  if (rawMsg.includes('API_KEY_INVALID') || code === 400 && rawMsg.includes('key')) {
+    return new Error(
+      'La clave de API de Gemini configurada no es válida. Revisa el valor de VITE_GEMINI_API_KEY en Vercel.'
+    );
+  }
+
+  if (code === 403 || rawMsg.includes('403') || rawMsg.includes('PERMISSION_DENIED')) {
+    return new Error(
+      'Permiso denegado por Google Gemini (Error 403). Verifica que tu API key esté habilitada en Google AI Studio.'
+    );
+  }
+
+  return err instanceof Error ? err : new Error(rawMsg || 'Error al comunicarse con Google Gemini.');
+}
+
