@@ -204,8 +204,19 @@ export function restarUnDia(dateStr) {
  * Llama a Gemini multimodal para extraer datos estructurados del extracto en PDF.
  */
 export async function extraerDatosExtractoConIA({ fileBase64, fileName = "extracto.pdf" }) {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') || '';
-  const ai = new GoogleGenAI(apiKey ? { apiKey } : {});
+  const apiKey =
+    import.meta.env.VITE_GEMINI_API_KEY ||
+    (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') ||
+    '';
+
+  if (!apiKey) {
+    throw new Error(
+      "No se encontró la clave de API de Gemini (VITE_GEMINI_API_KEY). " +
+      "Debes configurar la variable de entorno 'VITE_GEMINI_API_KEY' en la configuración de tu proyecto en Vercel y redesplegar."
+    );
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
 
   const prompt = `Eres un auditor contable experto en extractos bancarios colombianos (Tarjetas de crédito y cuentas).
 Analiza el documento PDF adjunto (${fileName}) y extrae los datos del extracto con precisión quirúrgica.

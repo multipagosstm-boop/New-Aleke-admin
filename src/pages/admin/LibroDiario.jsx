@@ -79,19 +79,19 @@ export default function LibroDiario() {
     try {
       const [comps, movs, clients, cdas, prods, puc, me] = await Promise.all([
         base44.entities.ComprobanteContable.list("-fecha", 5000),
-        base44.entities.MovimientoContable.list("-fecha", 1500),
+        base44.entities.MovimientoContable.list("-fecha", 2000),
         base44.entities.Cliente.list(),
         base44.entities.CuentaAhorro.list(),
         base44.entities.ProductoCredito.list(),
         base44.entities.Cuenta.filter({ es_transaccional: true }, "codigo", 500),
         base44.auth.me().catch(() => null)
       ]);
-      setComprobantes(comps);
-      setMovimientos(movs);
-      setClientes(clients);
-      setCuentasAhorro(cdas);
-      setProductosCredito(prods);
-      setPucTransaccional(puc);
+      setComprobantes(comps || []);
+      setMovimientos((movs || []).filter((m) => m.estado !== "inactivo"));
+      setClientes(clients || []);
+      setCuentasAhorro(cdas || []);
+      setProductosCredito(prods || []);
+      setPucTransaccional(puc || []);
       setUser(me);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -109,6 +109,7 @@ export default function LibroDiario() {
   const movsByComprobante = useMemo(() => {
     const map = {};
     movimientos.forEach((m) => {
+      if (m.estado === "inactivo") return;
       if (!map[m.comprobante_id]) map[m.comprobante_id] = [];
       map[m.comprobante_id].push(m);
     });
@@ -124,11 +125,11 @@ export default function LibroDiario() {
         setLoadingMovsId(comprobanteId);
         try {
           const fresh = await base44.entities.MovimientoContable.filter({ comprobante_id: comprobanteId });
-          if (fresh && fresh.length > 0) {
+          const activeFresh = (fresh || []).filter((m) => m.estado !== "inactivo");
+          if (activeFresh.length > 0) {
             setMovimientos((prev) => {
-              const existingIds = new Set(prev.map(m => m.id));
-              const newItems = fresh.filter(m => !existingIds.has(m.id));
-              return [...prev, ...newItems];
+              const otros = prev.filter((m) => m.comprobante_id !== comprobanteId);
+              return [...otros, ...activeFresh];
             });
           }
         } catch (err) {
@@ -141,25 +142,31 @@ export default function LibroDiario() {
   };
 
   const handleEditComprobante = async (c) => {
-    let compMovs = movsByComprobante[c.id] || [];
-    if (compMovs.length === 0) {
-      try {
-        const fresh = await base44.entities.MovimientoContable.filter({ comprobante_id: c.id });
-        if (fresh && fresh.length > 0) {
-          compMovs = fresh;
-          setMovimientos((prev) => {
-            const existingIds = new Set(prev.map(m => m.id));
-            const newItems = fresh.filter(m => !existingIds.has(m.id));
-            return [...prev, ...newItems];
-          });
-        }
-      } catch (err) {
-        console.warn("Error cargando movimientos para editar:", err);
-      }
+    let compMovs = [];
+    try {
+      const fresh = await base44.entities.MovimientoContable.filter({ comprobante_id: c.id });
+      compMovs = (fresh || []).filter((m) => m.estado !== "inactivo");
+      setMovimientos((prev) => {
+        const otros = prev.filter((m) => m.comprobante_id !== c.id);
+        return [...otros, ...compMovs];
+      });
+    } catch (err) {
+      console.warn("Error cargando movimientos para editar:", err);
+      compMovs = (movsByComprobante[c.id] || []).filter((m) => m.estado !== "inactivo");
     }
     setEditingComp(c);
     setEditingMovs(compMovs);
     setFormOpen(true);
+  };
+
+  const handleSavedComprobante = async () => {
+    if (editingComp) {
+      const idModificado = editingComp.id;
+      setMovimientos((prev) => prev.filter((m) => m.comprobante_id !== idModificado));
+      setEditingComp(null);
+      setEditingMovs([]);
+    }
+    await loadData();
   };
 
   const filtered = comprobantes.filter((c) => {
@@ -676,7 +683,7 @@ export default function LibroDiario() {
       <ComprobanteForm
         open={formOpen}
         onOpenChange={(v) => { setFormOpen(v); if (!v) { setEditingComp(null); setEditingMovs([]); } }}
-        onSaved={loadData}
+        onSaved={handleSavedComprobante}
         pucTransaccional={pucTransaccional}
         clientes={clientes}
         cuentasAhorro={cuentasAhorro}

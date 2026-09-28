@@ -152,7 +152,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!saving) onOpenChange(v); }}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[95vw] sm:max-w-lg max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>Nuevo Contrato de Arriendo</DialogTitle>
         </DialogHeader>
@@ -173,7 +173,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
 
           {/* Inquilino */}
           <div className="rounded-md border p-3 space-y-2 bg-muted/20">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button type="button" size="sm" variant={modoInquilino === "nuevo" ? "default" : "outline"} onClick={() => setModoInquilino("nuevo")}>Nuevo inquilino</Button>
               <Button type="button" size="sm" variant={modoInquilino === "existente" ? "default" : "outline"} onClick={() => setModoInquilino("existente")}>Inquilino existente</Button>
             </div>
@@ -195,7 +195,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
                   <Label>Nombre completo *</Label>
                   <Input value={nuevoInq.nombre_completo} onChange={(e) => setInq("nombre_completo", e.target.value)} />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <Label>Tipo doc.</Label>
                     <Select value={nuevoInq.tipo_documento} onValueChange={(v) => setInq("tipo_documento", v)}>
@@ -212,7 +212,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
                   <Label>Lugar de expedición</Label>
                   <Input value={nuevoInq.lugar_expedicion} onChange={(e) => setInq("lugar_expedicion", e.target.value)} />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <Label>Correo</Label>
                     <Input type="email" value={nuevoInq.email} onChange={(e) => setInq("email", e.target.value)} />
@@ -227,7 +227,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
           </div>
 
           {/* Contrato */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Fecha inicio *</Label>
               <Input type="date" value={form.fecha_inicio} onChange={(e) => set("fecha_inicio", e.target.value)} />
@@ -241,7 +241,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
             <Label>Fecha fin (auto)</Label>
             <Input type="date" value={fechaFin} disabled className="bg-muted/30" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Valor arriendo *</Label>
               <NumberInput value={form.valor_arriendo} onChange={(v) => handleValorArriendo(v)} placeholder="0" />
@@ -256,8 +256,8 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
             <Label htmlFor="reg-dep" className="text-sm cursor-pointer">Registrar depósito ahora</Label>
           </div>
           {form.registrar_deposito && (
-            <div className="grid grid-cols-2 gap-3 pl-6 border-l-2 border-primary/30">
-              <div className="col-span-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pl-4 sm:pl-6 border-l-2 border-primary/30">
+              <div className="col-span-1 sm:col-span-2">
                 <Label>CDA de recibo del depósito</Label>
                 <Select value={form.cda_pago_id} onValueChange={(v) => set("cda_pago_id", v)}>
                   <SelectTrigger><SelectValue placeholder="Seleccionar CDA..." /></SelectTrigger>
@@ -266,7 +266,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
                   </SelectContent>
                 </Select>
               </div>
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <Label>Fecha del depósito</Label>
                 <Input type="date" value={form.fecha_deposito} onChange={(e) => set("fecha_deposito", e.target.value)} />
               </div>
@@ -286,9 +286,9 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
             </div>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving || !canSubmit}>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)} disabled={saving}>Cancelar</Button>
+          <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={saving || !canSubmit}>
             {saving ? (generandoPdf ? "Generando PDF..." : "Creando...") : "Crear Contrato y Generar PDF"}
           </Button>
         </DialogFooter>

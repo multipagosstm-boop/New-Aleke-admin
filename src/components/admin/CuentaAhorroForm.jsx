@@ -97,12 +97,12 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="w-[95vw] sm:max-w-lg max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>{editing ? "Editar Cuenta de Ahorro" : "Nueva Cuenta de Ahorro"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Número de cuenta completo *</Label>
               <Input value={numeroCompleto} onChange={(e) => setNumeroCompleto(e.target.value)} placeholder="Ej: 001-123456-78" />
@@ -123,7 +123,7 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
               </span>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Banco *</Label>
               <Select value={banco} onValueChange={setBanco}>
@@ -172,9 +172,9 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
             <Textarea value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Observaciones (opcional)" rows={2} />
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving || !!duplicado}>{saving ? "Guardando..." : editing ? "Guardar" : "Crear Cuenta"}</Button>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={saving || !!duplicado}>{saving ? "Guardando..." : editing ? "Guardar" : "Crear Cuenta"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

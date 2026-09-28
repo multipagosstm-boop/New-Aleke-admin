@@ -122,14 +122,14 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl max-h-[94vh] overflow-y-auto">
+      <DialogContent className="w-[95vw] sm:max-w-5xl max-h-[94vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><HandCoins className="w-5 h-5 text-primary" /> Nuevo Préstamo Pakredito</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="col-span-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="col-span-1 sm:col-span-2">
               <Label>Cliente *</Label>
               <SearchableSelect value={clienteId} onValueChange={setClienteId} placeholder="Seleccionar cliente..." searchPlaceholder="Buscar cliente..."
                 options={clientes.map((c) => ({ value: c.id, label: `${c.nombre}${c.cedula ? ` · ${c.cedula}` : ""}`, searchKey: `${c.nombre} ${c.cedula || ""}` }))}
@@ -188,12 +188,12 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
 
           {/* Listado de movimientos del desembolso */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>Movimientos del desembolso — el total equivale al capital a prestar (contrapartida automática 120506 en débito)</Label>
-              <Button size="sm" variant="outline" onClick={addMov} type="button"><Plus className="w-4 h-4 mr-1" /> Línea</Button>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <Label>Movimientos del desembolso — total equivale al capital a prestar (contrapartida 120506 automática)</Label>
+              <Button size="sm" variant="outline" onClick={addMov} type="button" className="self-start sm:self-auto"><Plus className="w-4 h-4 mr-1" /> Línea</Button>
             </div>
-            <div className="border border-border rounded-lg overflow-hidden">
-              <table className="w-full text-xs">
+            <div className="border border-border rounded-lg overflow-x-auto">
+              <table className="w-full min-w-[520px] text-xs">
                 <thead className="bg-muted/50 border-b border-border text-left text-muted-foreground uppercase">
                   <tr>
                     <th className="px-2 py-2 font-medium w-[40%]">Cuenta PUC</th>
@@ -229,19 +229,21 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
 
           {/* Botón de amortización */}
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={generarPreview} type="button"><Calculator className="w-4 h-4 mr-2" /> Generar amortización</Button>
+            <Button variant="secondary" onClick={generarPreview} type="button" className="w-full sm:w-auto"><Calculator className="w-4 h-4 mr-2" /> Generar amortización</Button>
           </div>
 
           {preview && (
             <div className="space-y-3 border-t pt-3">
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
                 <Resumen label="Cuota fija" value={modelo === "cuota_fija" ? formatCOP(preview.cuota) : "Variable"} />
                 <Resumen label="Total intereses" value={formatCOP(preview.totalIntereses)} />
                 <Resumen label="Total a pagar" value={formatCOP(preview.totalAPagar)} />
                 <Resumen label={`Tasa efectiva ${periodoLabel}`} value={(preview.tep * 100).toFixed(4) + "%"} />
                 <Resumen label="Tasa nominal mensual" value={(preview.tasaNominal * 100).toFixed(4) + "%"} />
               </div>
-              <AmortizacionTable cuotas={preview.schedule} modelo={modelo} />
+              <div className="overflow-x-auto">
+                <AmortizacionTable cuotas={preview.schedule} modelo={modelo} />
+              </div>
               <p className="text-[11px] text-muted-foreground">
                 {modelo === "cuota_fija"
                   ? "Intereses compuestos generados de forma anticipada. Los abonos prematuros no reducen los intereses."
@@ -257,9 +259,9 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving}>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={saving}>
             {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Registrar préstamo
           </Button>
         </DialogFooter>

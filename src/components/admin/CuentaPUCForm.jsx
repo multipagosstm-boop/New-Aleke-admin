@@ -107,7 +107,7 @@ export default function CuentaPUCForm({ open, onOpenChange, onSaved, cuentas = [
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="w-[95vw] sm:max-w-md max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>{editing ? "Editar cuenta PUC" : "Nueva cuenta PUC"}</DialogTitle>
         </DialogHeader>
@@ -151,7 +151,7 @@ export default function CuentaPUCForm({ open, onOpenChange, onSaved, cuentas = [
             <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Ej: Bancos, Proveedores Nacionales..." />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Naturaleza *</Label>
               <Select value={naturaleza} onValueChange={setNaturaleza}>
@@ -182,9 +182,9 @@ export default function CuentaPUCForm({ open, onOpenChange, onSaved, cuentas = [
           </div>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving}>{saving ? "Guardando..." : "Guardar"}</Button>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)} disabled={saving}>Cancelar</Button>
+          <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={saving}>{saving ? "Guardando..." : "Guardar"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

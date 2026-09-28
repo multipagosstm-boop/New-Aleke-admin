@@ -195,10 +195,25 @@ export async function createComprobante(entities, payload = {}) {
   });
 
   const createdMovs = [];
+  let pucList = [];
+  try {
+    pucList = await entities.Cuenta.list();
+  } catch {
+    pucList = [];
+  }
+  const pucMap = {};
+  (pucList || []).forEach((c) => { pucMap[String(c.codigo)] = c; });
+
   for (const m of movimientos) {
+    const cuentaPuc = pucMap[String(m.subcuenta)] || {};
     const mov = await entities.MovimientoContable.create({
       ...m,
       comprobante_id: comprobante.id,
+      cuenta_nombre: m.cuenta_nombre || cuentaPuc.concepto || "",
+      clase: m.clase || cuentaPuc.clase || (cuentaPuc.tipo_naturaleza || "activo"),
+      grupo: m.grupo || String(cuentaPuc.grupo || ""),
+      cuenta: m.cuenta || String(cuentaPuc.cuenta || ""),
+      periodo_operacion: (fecha || comprobante.fecha || "").substring(0, 7),
       estado: "activo",
       fecha: comprobante.fecha
     });
@@ -215,6 +230,12 @@ export async function createComprobante(entities, payload = {}) {
     fecha: comprobante.fecha
   });
 
+  try {
+    await recalcularSaldos(entities);
+  } catch (errRecalc) {
+    console.warn("Recálculo tras creación:", errRecalc);
+  }
+
   return {
     comprobante,
     movimientos: createdMovs,
@@ -223,38 +244,88 @@ export async function createComprobante(entities, payload = {}) {
 }
 
 export async function modificarComprobante(entities, payload = {}) {
-  const { comprobante_id, fecha, tipo, descripcion, soporte_url, movimientos } = payload;
+  const { comprobante_id, fecha, tipo, descripcion, soporte_url, movimientos, motivo = "" } = payload;
   const existing = await entities.ComprobanteContable.get(comprobante_id);
   if (!existing) throw new Error("Comprobante no encontrado");
 
   const debitoTotal = movimientos ? movimientos.reduce((s, m) => s + (Number(m.debito) || 0), 0) : existing.total_debito;
   const creditoTotal = movimientos ? movimientos.reduce((s, m) => s + (Number(m.credito) || 0), 0) : existing.total_credito;
+  const fechaDoc = fecha || existing.fecha || new Date().toISOString().split('T')[0];
 
   const updated = await entities.ComprobanteContable.update(comprobante_id, {
-    ...(fecha ? { fecha } : {}),
+    ...(fecha ? { fecha: fechaDoc } : {}),
     ...(tipo ? { tipo } : {}),
-    ...(descripcion !== undefined ? { descripcion } : {}),
+    ...(descripcion !== undefined ? { descripcion: descripcion.trim() } : {}),
     ...(soporte_url !== undefined ? { soporte_url } : {}),
     total_debito: debitoTotal,
     total_credito: creditoTotal
   });
 
+  const createdMovs = [];
   if (movimientos && movimientos.length > 0) {
+    // 1. Eliminar PERMANENTEMENTE todos los movimientos anteriores vinculados a este comprobante
     const oldMovs = await entities.MovimientoContable.filter({ comprobante_id });
-    for (const om of oldMovs) {
-      await entities.MovimientoContable.update(om.id, { estado: "inactivo" });
+    if (oldMovs && oldMovs.length > 0) {
+      for (const om of oldMovs) {
+        try {
+          await entities.MovimientoContable.delete(om.id);
+        } catch (delErr) {
+          console.warn(`Error eliminando movimiento viejo ${om.id}:`, delErr);
+        }
+      }
     }
+
+    // 2. Mapear PUC para enriquecer nombres y clases contables
+    let pucList = [];
+    try {
+      pucList = await entities.Cuenta.list();
+    } catch {
+      pucList = [];
+    }
+    const pucMap = {};
+    (pucList || []).forEach((c) => { pucMap[String(c.codigo)] = c; });
+
+    // 3. Crear exclusivamente los nuevos movimientos corregidos
     for (const m of movimientos) {
-      await entities.MovimientoContable.create({
+      const cuentaPuc = pucMap[String(m.subcuenta)] || {};
+      const mov = await entities.MovimientoContable.create({
         ...m,
         comprobante_id,
+        cuenta_nombre: m.cuenta_nombre || cuentaPuc.concepto || "",
+        clase: m.clase || cuentaPuc.clase || (cuentaPuc.tipo_naturaleza || "activo"),
+        grupo: m.grupo || String(cuentaPuc.grupo || ""),
+        cuenta: m.cuenta || String(cuentaPuc.cuenta || ""),
+        periodo_operacion: fechaDoc.substring(0, 7),
         estado: "activo",
-        fecha: updated.fecha
+        fecha: fechaDoc
       });
+      createdMovs.push(mov);
+    }
+
+    // 4. Recalcular automáticamente saldos de cuentas de ahorro y tarjetas
+    try {
+      await recalcularSaldos(entities);
+    } catch (errRecalc) {
+      console.warn("Recálculo tras modificación:", errRecalc);
     }
   }
 
-  return { comprobante: updated, success: true };
+  // Registrar auditoría en histórico contable
+  try {
+    await entities.HistoricoContable.create({
+      comprobante_id,
+      numero_comprobante: existing.numero,
+      accion: "modificacion",
+      descripcion: motivo ? `Modificación comprobante ${existing.numero}: ${motivo}` : `Modificación comprobante ${existing.numero}`,
+      monto_total: debitoTotal,
+      usuario_email: "multipagosstm@gmail.com",
+      fecha: fechaDoc
+    });
+  } catch (errHist) {
+    console.warn("Error guardando histórico de modificación:", errHist);
+  }
+
+  return { comprobante: updated, movimientos: createdMovs, success: true };
 }
 
 export async function anularComprobante(entities, payload = {}) {
@@ -796,7 +867,8 @@ export async function procesarExtractoPDF(entities, payload = {}) {
       try {
         data = await extraerDatosExtractoConIA({ fileBase64: file_base64, fileName: file_name });
       } catch (err) {
-        console.warn("Extracción multimodal con Gemini falló:", err);
+        console.error("Extracción multimodal con Gemini falló:", err);
+        throw new Error(err.message || "Error al procesar el archivo con inteligencia artificial.");
       }
     }
 

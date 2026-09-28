@@ -152,13 +152,16 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
       // Convertir el archivo a base64 para análisis directo con IA multimodal
       let fileBase64 = "";
       try {
-        const buffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        let binary = "";
-        for (let i = 0; i < bytes.byteLength; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        fileBase64 = btoa(binary);
+        fileBase64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const res = String(reader.result || "");
+            const base64 = res.includes(",") ? res.split(",")[1] : res;
+            resolve(base64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
       } catch (convErr) {
         console.warn("No se pudo convertir a base64:", convErr);
       }

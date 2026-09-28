@@ -18,7 +18,7 @@ export default function TarjetaAtributosFields({
   return (
     <div className="space-y-3 border-t border-border pt-3">
       {esTDC && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <Label>Franquicia</Label>
             <Select value={franquicia || ""} onValueChange={setFranquicia}>
@@ -50,7 +50,7 @@ export default function TarjetaAtributosFields({
         </Select>
       </div>
       {corteModo === "dia_semana" ? (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <Label>Ordinal</Label>
             <Select value={String(corteSemana || 1)} onValueChange={(v) => setCorteSemana(Number(v))}>

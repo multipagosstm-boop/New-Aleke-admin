@@ -76,12 +76,12 @@ export default function ClienteForm({ open, onOpenChange, editing, onSaved }) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[95vw] sm:max-w-2xl max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>{editing ? "Editar Cliente" : "Nuevo Cliente"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Nombre / Razón social *</Label>
               <Input value={form.nombre} onChange={(e) => set("nombre", e.target.value)} />
@@ -97,7 +97,7 @@ export default function ClienteForm({ open, onOpenChange, editing, onSaved }) {
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Cédula / NIT</Label>
               <Input value={form.cedula} onChange={(e) => set("cedula", e.target.value)} />
@@ -107,7 +107,7 @@ export default function ClienteForm({ open, onOpenChange, editing, onSaved }) {
               <Input value={form.telefono} onChange={(e) => set("telefono", e.target.value)} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Correo</Label>
               <Input type="email" value={form.correo} onChange={(e) => set("correo", e.target.value)} />
@@ -117,7 +117,7 @@ export default function ClienteForm({ open, onOpenChange, editing, onSaved }) {
               <Input value={form.direccion} onChange={(e) => set("direccion", e.target.value)} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Ocupación</Label>
               <Input value={form.ocupacion} onChange={(e) => set("ocupacion", e.target.value)} />
@@ -127,7 +127,7 @@ export default function ClienteForm({ open, onOpenChange, editing, onSaved }) {
               <Input value={form.lugar_trabajo} onChange={(e) => set("lugar_trabajo", e.target.value)} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Referido por</Label>
               <Input value={form.referido_por} onChange={(e) => set("referido_por", e.target.value)} />
@@ -146,7 +146,7 @@ export default function ClienteForm({ open, onOpenChange, editing, onSaved }) {
           <div>
             <Label>Líneas de negocio</Label>
             <p className="text-[11px] text-muted-foreground mb-2">Seleccione las líneas a las que se vinculará el cliente (puede ser ninguna).</p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {LINEAS_NEGOCIO_OPTS.map((ln) => (
                 <div key={ln.value} className="flex items-center gap-2 rounded-md border px-3 py-2">
                   <Checkbox
@@ -168,9 +168,9 @@ export default function ClienteForm({ open, onOpenChange, editing, onSaved }) {
             <Textarea value={form.notas} onChange={(e) => set("notas", e.target.value)} placeholder="Observaciones internas..." rows={2} />
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving || !form.nombre.trim() || !form.telefono.trim()}>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={saving || !form.nombre.trim() || !form.telefono.trim()}>
             {saving ? "Guardando..." : editing ? "Guardar Cambios" : "Crear Cliente"}
           </Button>
         </DialogFooter>

@@ -323,21 +323,23 @@ export async function ejecutarModificacionDirecta(base44, comprobante, user, par
 
   const { movimientosData, totalDebito, totalCredito, warnings, config } = await prepararMovimientos(base44, movimientos, modo, tipo, confirmar_sobregiro);
 
-  // 1. Reversar saldos de los movimientos originales (sin generar nota crédito)
-  const movsOriginales = await base44.asServiceRole.entities.MovimientoContable.filter({
-    comprobante_id: comprobante.id, estado: "activo"
+  // 1. Reversar saldos de los movimientos originales activos
+  const todosMovsOriginales = await base44.asServiceRole.entities.MovimientoContable.filter({
+    comprobante_id: comprobante.id
   });
-  for (const mov of movsOriginales) {
-    if (mov.cuenta_ahorro_id) {
-      await actualizarSaldoCuentaAhorro(base44, mov.cuenta_ahorro_id, mov.debito, mov.credito, true);
-    }
-    if (mov.producto_credito_id) {
-      await actualizarSaldoProductoCredito(base44, mov.producto_credito_id, mov.debito, mov.credito, true);
+  for (const mov of (todosMovsOriginales || [])) {
+    if (mov.estado === "activo") {
+      if (mov.cuenta_ahorro_id) {
+        await actualizarSaldoCuentaAhorro(base44, mov.cuenta_ahorro_id, mov.debito, mov.credito, true);
+      }
+      if (mov.producto_credito_id) {
+        await actualizarSaldoProductoCredito(base44, mov.producto_credito_id, mov.debito, mov.credito, true);
+      }
     }
   }
 
-  // 2. Eliminar movimientos originales
-  for (const mov of movsOriginales) {
+  // 2. Eliminar definitivamente todos los movimientos originales (activos o inactivos)
+  for (const mov of (todosMovsOriginales || [])) {
     await base44.asServiceRole.entities.MovimientoContable.delete(mov.id);
   }
 

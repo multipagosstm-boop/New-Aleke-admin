@@ -173,12 +173,12 @@ export default function TarjetaForm({ open, onOpenChange, onSaved, editing, clie
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="w-[95vw] sm:max-w-lg max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>{editing ? "Editar Producto de Crédito" : "Nuevo Producto de Crédito"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Tipo de producto *</Label>
               <Select value={tipo} onValueChange={setTipo} disabled={!!editing}>
@@ -271,9 +271,9 @@ export default function TarjetaForm({ open, onOpenChange, onSaved, editing, clie
           )}
           {error && <div className="text-sm text-destructive">{error}</div>}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving || !!duplicado}>{saving ? "Guardando..." : editing ? "Guardar" : "Crear Producto"}</Button>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={saving || !!duplicado}>{saving ? "Guardando..." : editing ? "Guardar" : "Crear Producto"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -122,13 +122,13 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="w-[95vw] sm:max-w-3xl max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Wallet className="w-5 h-5 text-primary" /> Registrar Abono</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label>Cliente *</Label>
               <SearchableSelect value={clienteId} onValueChange={setClienteId} placeholder="Seleccionar cliente..." searchPlaceholder="Buscar cliente..."
@@ -183,7 +183,7 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
                           <span className="text-xs text-muted-foreground">{p.modelo === "cuota_fija" ? `Cuota: ${formatCOP(p.cuota_fija)}` : "Mes vencido"}</span>
                         </div>
                         {sel && (
-                          <div className="grid grid-cols-3 gap-2 pl-6">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pl-2 sm:pl-6">
                             <div>
                               <Label className="text-[10px] uppercase">Abono a este crédito</Label>
                               <NumberInput value={aplicaciones[p.id]} onChange={(v) => setAplicacion(p.id, v)} className="h-8 text-xs text-right" />
@@ -240,9 +240,9 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={saving}>
+        <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button className="w-full sm:w-auto" onClick={handleSubmit} disabled={saving}>
             {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Registrar abono
           </Button>
         </DialogFooter>
