@@ -865,7 +865,11 @@ export async function procesarExtractoPDF(entities, payload = {}) {
 
     if (file_base64) {
       try {
-        data = await extraerDatosExtractoConIA({ fileBase64: file_base64, fileName: file_name });
+        data = await extraerDatosExtractoConIA({
+          fileBase64: file_base64,
+          fileName: file_name,
+          onStatusUpdate: payload.onStatusUpdate
+        });
       } catch (err) {
         console.error("Extracción multimodal con Gemini falló:", err);
         throw new Error(err.message || "Error al procesar el archivo con inteligencia artificial.");

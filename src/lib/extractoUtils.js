@@ -203,7 +203,7 @@ export function restarUnDia(dateStr) {
 /**
  * Llama a Gemini multimodal para extraer datos estructurados del extracto en PDF.
  */
-export async function extraerDatosExtractoConIA({ fileBase64, fileName = "extracto.pdf" }) {
+export async function extraerDatosExtractoConIA({ fileBase64, fileName = "extracto.pdf", onStatusUpdate }) {
   const apiKey =
     import.meta.env.VITE_GEMINI_API_KEY ||
     (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '') ||
@@ -281,14 +281,31 @@ Devuelve UNICAMENTE un objeto JSON válido con este esquema:
     }
   ];
 
-  // Modelos candidatos en orden de preferencia (todos admiten PDF multimodal y JSON)
+  // Configuración de Retroceso Exponencial (Exponential Backoff)
   const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  const maxAttemptsPerModel = 3;
+  const baseDelayMs = 1500; // 1.5s inicial
+  const backoffMultiplier = 2; // 1.5s -> 3s -> 6s
+  const maxDelayMs = 8000; // Máximo 8s de espera entre intentos
+
   let lastError = null;
   let response = null;
 
-  for (const model of candidateModels) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+    const model = candidateModels[mIdx];
+
+    for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
       try {
+        if (typeof onStatusUpdate === 'function') {
+          onStatusUpdate({
+            status: 'attempting',
+            model,
+            attempt,
+            maxAttempts: maxAttemptsPerModel,
+            message: `Consultando ${model} (intento ${attempt}/${maxAttemptsPerModel})…`
+          });
+        }
+
         response = await ai.models.generateContent({
           model,
           contents,
@@ -297,7 +314,10 @@ Devuelve UNICAMENTE un objeto JSON válido con este esquema:
             responseMimeType: 'application/json'
           }
         });
-        if (response?.text) break;
+
+        if (response?.text) {
+          break; // Éxito con este modelo
+        }
       } catch (err) {
         lastError = err;
         const errMsg = String(err?.message || err || '');
@@ -307,19 +327,52 @@ Devuelve UNICAMENTE un objeto JSON válido con este esquema:
           errMsg.includes('UNAVAILABLE') ||
           errMsg.includes('temporarily') ||
           errMsg.includes('429') ||
-          errMsg.includes('RESOURCE_EXHAUSTED');
+          errMsg.includes('RESOURCE_EXHAUSTED') ||
+          errMsg.includes('overloaded');
 
-        console.warn(`[Gemini] Intento con modelo ${model} (intento ${attempt}) falló:`, errMsg);
+        console.warn(`[Gemini Backoff] Modelo ${model} fallo (intento ${attempt}/${maxAttemptsPerModel}):`, errMsg);
 
-        if (isTemporary && attempt === 1) {
-          // Esperar 1.5s antes de reintentar el mismo modelo
-          await new Promise((r) => setTimeout(r, 1500));
+        // Si es un error temporal y aún quedan intentos para este modelo, aplicar exponential backoff
+        if (isTemporary && attempt < maxAttemptsPerModel) {
+          // Fórmula: base * multiplier^(attempt - 1)
+          const rawDelay = baseDelayMs * Math.pow(backoffMultiplier, attempt - 1);
+          // Jitter aleatorio (+-20%) para evitar colisiones entre peticiones simultáneas
+          const jitter = 0.8 + Math.random() * 0.4;
+          const waitMs = Math.min(Math.round(rawDelay * jitter), maxDelayMs);
+          const waitSec = (waitMs / 1000).toFixed(1);
+
+          if (typeof onStatusUpdate === 'function') {
+            onStatusUpdate({
+              status: 'retrying',
+              model,
+              attempt,
+              nextAttempt: attempt + 1,
+              maxAttempts: maxAttemptsPerModel,
+              waitMs,
+              message: `Alta demanda temporal en ${model} (503). Reintentando en ${waitSec}s con retroceso exponencial (intento ${attempt + 1}/${maxAttemptsPerModel})…`
+            });
+          }
+
+          await new Promise((r) => setTimeout(r, waitMs));
           continue;
         }
-        // Si no es temporal o ya es el 2do intento, pasar al siguiente modelo
+
+        // Si no es temporal o se agotaron los intentos de este modelo, pasar al siguiente modelo
+        if (mIdx < candidateModels.length - 1) {
+          const nextModel = candidateModels[mIdx + 1];
+          if (typeof onStatusUpdate === 'function') {
+            onStatusUpdate({
+              status: 'switching_model',
+              previousModel: model,
+              nextModel,
+              message: `Cambiando a modelo alternativo ${nextModel} debido a saturación en ${model}…`
+            });
+          }
+        }
         break;
       }
     }
+
     if (response?.text) break;
   }
 
@@ -352,14 +405,15 @@ function parseAndHumanizeGeminiError(err) {
 
   if (code === 503 || rawMsg.includes('503') || rawMsg.includes('high demand') || status === 'UNAVAILABLE') {
     return new Error(
-      'Los servidores de Google Gemini están experimentando alta demanda en este momento (Error 503 temporal). ' +
-      'Por favor espera unos 10 segundos y vuelve a presionar "Procesar extracto".'
+      'Los servidores de Google Gemini están experimentando alta demanda temporal (Error 503). ' +
+      'El sistema aplicó reintentos automáticos con retroceso exponencial, pero la congestión continúa. ' +
+      'Por favor espera 15 a 30 segundos y vuelve a presionar "Procesar extracto".'
     );
   }
 
   if (code === 429 || rawMsg.includes('429') || rawMsg.includes('RESOURCE_EXHAUSTED') || rawMsg.includes('quota')) {
     return new Error(
-      'Se alcanzó temporalmente el límite de peticiones de Google Gemini (Error 429). ' +
+      'Se alcanzó temporalmente el límite de peticiones de Google Gemini (Error 429 / Cuota excedida). ' +
       'Por favor espera un minuto antes de reintentar.'
     );
   }
@@ -378,4 +432,5 @@ function parseAndHumanizeGeminiError(err) {
 
   return err instanceof Error ? err : new Error(rawMsg || 'Error al comunicarse con Google Gemini.');
 }
+
 

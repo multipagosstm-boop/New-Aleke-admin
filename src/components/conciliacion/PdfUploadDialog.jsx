@@ -49,6 +49,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
   const [productosLocales, setProductosLocales] = useState(productos);
   const [showTarjetaForm, setShowTarjetaForm] = useState(false);
   const [showReemplazo, setShowReemplazo] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
   const inputRef = useRef(null);
 
   useEffect(() => { setProductosLocales(productos); }, [productos]);
@@ -181,11 +182,17 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
       }
 
       // 2. Extraer datos con la función backend
+      setStatusMsg("Analizando extracto con IA multimodal…");
       const resp = await base44.functions.invoke("procesarExtractoPDF", {
         action: "extraer",
         file_url: url,
         file_base64: fileBase64,
-        file_name: file.name
+        file_name: file.name,
+        onStatusUpdate: (info) => {
+          if (info?.message) {
+            setStatusMsg(info.message);
+          }
+        }
       });
       if (resp.data?.error) throw new Error(resp.data.error);
 
@@ -298,10 +305,16 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
 
         {/* Step: Extracting */}
         {step === "extracting" && (
-          <div className="flex flex-col items-center py-12 gap-3">
+          <div className="flex flex-col items-center py-12 gap-3 text-center px-4 max-w-md mx-auto">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            <p className="text-sm text-muted-foreground">Analizando extracto con IA…</p>
-            <p className="text-xs text-muted-foreground">Esto puede tardar 15-30 segundos</p>
+            <p className="text-sm font-medium text-foreground">
+              {statusMsg || "Analizando extracto con IA multimodal…"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {statusMsg && (statusMsg.includes("Reintentando") || statusMsg.includes("Alta demanda") || statusMsg.includes("Cambiando"))
+                ? "Gestión automática de tolerancia a fallos por congestión temporal (Exponential Backoff)"
+                : "Esto puede tardar entre 15 y 30 segundos mientras se leen todas las transacciones"}
+            </p>
           </div>
         )}
 
