@@ -360,13 +360,28 @@ export function createEntityRepository(entityName) {
 
       const client = getSupabase();
       if (client) {
-        const { data, error } = await client.from(table).insert([payload]).select().single();
-        if (!error && data) {
-          getMemoryCollection(table).set(id, data);
-          return data;
+        let attempts = 0;
+        let lastError = null;
+        while (attempts < 5) {
+          attempts++;
+          const { data, error } = await client.from(table).insert([payload]).select().single();
+          if (!error && data) {
+            getMemoryCollection(table).set(id, data);
+            return data;
+          }
+          lastError = error;
+          if (error?.message && error.message.includes('in the schema cache')) {
+            const match = error.message.match(/Could not find the '([^']+)' column/);
+            if (match && match[1] && match[1] in payload) {
+              console.warn(`[Supabase Schema Cache] Omitting unknown column '${match[1]}' for insert on '${table}'`);
+              delete payload[match[1]];
+              continue;
+            }
+          }
+          break;
         }
-        handleRlsViolation(table, 'create', error);
-        console.warn(`Supabase insert fallback for ${table}:`, error?.message);
+        handleRlsViolation(table, 'create', lastError);
+        console.warn(`Supabase insert fallback for ${table}:`, lastError?.message);
       }
 
       getMemoryCollection(table).set(id, payload);
@@ -382,14 +397,29 @@ export function createEntityRepository(entityName) {
 
       const client = getSupabase();
       if (client) {
-        const { data, error } = await client.from(table).update(payload).eq('id', id).select().single();
-        if (!error && data) {
-          const coll = getMemoryCollection(table);
-          coll.set(id, { ...coll.get(id), ...data });
-          return data;
+        let attempts = 0;
+        let lastError = null;
+        while (attempts < 5) {
+          attempts++;
+          const { data, error } = await client.from(table).update(payload).eq('id', id).select().single();
+          if (!error && data) {
+            const coll = getMemoryCollection(table);
+            coll.set(id, { ...coll.get(id), ...data });
+            return data;
+          }
+          lastError = error;
+          if (error?.message && error.message.includes('in the schema cache')) {
+            const match = error.message.match(/Could not find the '([^']+)' column/);
+            if (match && match[1] && match[1] in payload) {
+              console.warn(`[Supabase Schema Cache] Omitting unknown column '${match[1]}' for update on '${table}'`);
+              delete payload[match[1]];
+              continue;
+            }
+          }
+          break;
         }
-        handleRlsViolation(table, 'update', error);
-        console.warn(`Supabase update fallback for ${table}:`, error?.message);
+        handleRlsViolation(table, 'update', lastError);
+        console.warn(`Supabase update fallback for ${table}:`, lastError?.message);
       }
 
       const coll = getMemoryCollection(table);

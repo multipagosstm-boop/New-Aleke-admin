@@ -94,20 +94,22 @@ export default function Resumen() {
         <CardContent className="pt-6">
           <div className="flex items-center gap-4">
             {Math.abs(totales.balanceDiff) < 1 ? (
-              <CheckCircle2 className="w-12 h-12 text-success" />
+              <CheckCircle2 className="w-12 h-12 text-success shrink-0" />
             ) : (
-              <AlertTriangle className="w-12 h-12 text-destructive" />
+              <AlertTriangle className="w-12 h-12 text-destructive shrink-0" />
             )}
             <div className="flex-1">
-              <div className="text-sm text-muted-foreground mb-1">Estado del Sistema</div>
+              <div className="text-sm text-muted-foreground mb-1">Estado del Sistema — Conciliación de Comprobantes</div>
               <div className="text-xl font-heading font-bold">
                 {Math.abs(totales.balanceDiff) < 1 ? "Sistema Cuadrado" : "Sistema Descuadrado"}
               </div>
-              {Math.abs(totales.balanceDiff) >= 1 && (
-                <div className="text-sm text-destructive mt-1">
-                  Diferencia: {formatCOP(totales.balanceDiff)}
-                </div>
-              )}
+              <div className="text-xs text-muted-foreground mt-1">
+                {Math.abs(totales.balanceDiff) < 1 ? (
+                  <span className="text-success font-medium">Partida doble verificada: Suma de créditos = Suma de débitos (Diferencia: $0 COP).</span>
+                ) : (
+                  <span className="text-destructive font-medium">Diferencia (Créditos - Débitos): {formatCOP(totales.balanceDiff)}</span>
+                )}
+              </div>
             </div>
             <Badge variant={Math.abs(totales.balanceDiff) < 1 ? "default" : "destructive"} className="text-sm">
               {Math.abs(totales.balanceDiff) < 1 ? "BALANCE OK" : "REVISAR"}
@@ -135,13 +137,15 @@ export default function Resumen() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card>
           <CardContent className="pt-6">
-            <h3 className="font-heading font-semibold mb-3">Ecuación Contable</h3>
+            <h3 className="font-heading font-semibold mb-3">Conciliación Contable</h3>
             <div className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-muted-foreground">Activo</span><span className="font-mono">{formatCOP(totales.activo)}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Pasivo + Patrimonio + Utilidad</span><span className="font-mono">{formatCOP(totales.pasivo + totales.patrimonio + totales.utilidad)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Total Débitos</span><span className="font-mono">{formatCOP(totales.totalDebito || totales.activo)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Total Créditos</span><span className="font-mono">{formatCOP(totales.totalCredito || totales.activo)}</span></div>
               <div className="border-t border-border pt-2 flex justify-between font-medium">
-                <span>Diferencia</span>
-                <span className={Math.abs(totales.balanceDiff) < 1 ? "text-success font-mono" : "text-destructive font-mono"}>{formatCOP(totales.balanceDiff)}</span>
+                <span>Resultado Conciliado</span>
+                <span className={Math.abs(totales.balanceDiff) < 1 ? "text-success font-mono" : "text-destructive font-mono"}>
+                  {formatCOP(totales.balanceDiff)}
+                </span>
               </div>
             </div>
           </CardContent>

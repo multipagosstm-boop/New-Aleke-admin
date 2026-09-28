@@ -104,6 +104,7 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
         cliente_id: clienteId, modelo, tasa_nominal: tasaNominal, periodo, numero_cuotas: numCuotas,
         fecha_prestamo: fecha,
         cuota_manual: cuotaMan,
+        capital,
         movimientos: validos.map((m) => ({
           subcuenta: m.subcuenta, debito: 0, credito: Number(m.credito) || 0,
           descripcion: m.descripcion || "Desembolso", tercero: m.tercero || "",

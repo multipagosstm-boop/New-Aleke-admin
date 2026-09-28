@@ -31,14 +31,15 @@ export default function Pakredito() {
   const [abonoOpen, setAbonoOpen] = useState(false);
   const [detailPrestamo, setDetailPrestamo] = useState(null);
   const [deleteAbonoId, setDeleteAbonoId] = useState(null);
+  const [deletePrestamoTarget, setDeletePrestamoTarget] = useState(null);
   const [prorrocaPrestamo, setProrrocaPrestamo] = useState(null);
   const [busquedaPrestamos, setBusquedaPrestamos] = useState("");
   const [busquedaAbonos, setBusquedaAbonos] = useState("");
   const { toast } = useToast();
 
   const clientesPakredito = useMemo(
-    () => clientes.filter((c) => (c.lineas_negocio || []).includes("pakredito")),
-    [clientes]
+    () => clientes.filter((c) => (c.lineas_negocio || []).includes("pakredito") || prestamos.some((p) => p.cliente_id === c.id)),
+    [clientes, prestamos]
   );
 
   const loadData = useCallback(async () => {
@@ -76,6 +77,14 @@ export default function Pakredito() {
   const eliminarAbono = async (motivo) => {
     await base44.functions.invoke("gestionarPakredito", { accion: "eliminarAbono", abono_id: deleteAbonoId, motivo });
     toast({ title: "Abono eliminado", description: "Se revirtió el comprobante y el estado del préstamo." });
+    await loadData();
+  };
+
+  const eliminarPrestamo = async (motivo) => {
+    if (!deletePrestamoTarget) return;
+    await base44.functions.invoke("gestionarPakredito", { accion: "eliminarPrestamo", prestamo_id: deletePrestamoTarget.id, motivo });
+    toast({ title: "Préstamo eliminado", description: `Se anuló el comprobante y registros de ${deletePrestamoTarget.codigo}.` });
+    setDeletePrestamoTarget(null);
     await loadData();
   };
 
@@ -306,11 +315,12 @@ export default function Pakredito() {
                     <th className="px-3 py-2 font-medium text-right">Saldo</th>
                     <th className="px-3 py-2 font-medium">Fecha</th>
                     <th className="px-3 py-2 font-medium text-center">Estado</th>
+                    <th className="px-3 py-2 font-medium w-10"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {prestamosFiltrados.length === 0 ? (
-                    <tr><td colSpan={7} className="px-3 py-4 text-center text-muted-foreground text-sm">Sin préstamos registrados.</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-4 text-center text-muted-foreground text-sm">Sin préstamos registrados.</td></tr>
                   ) : prestamosFiltrados.map((p) => (
                     <tr key={p.id} className="border-b border-border/50 hover:bg-muted/30 cursor-pointer" onClick={() => setDetailPrestamo(p)}>
                       <td className="px-3 py-1.5 font-mono text-xs">{p.codigo}</td>
@@ -320,6 +330,12 @@ export default function Pakredito() {
                       <td className="px-3 py-1.5 text-right font-mono">{formatCOP(p.saldo_capital)}</td>
                       <td className="px-3 py-1.5 font-mono text-xs">{formatDate(p.fecha_prestamo)}</td>
                       <td className="px-3 py-1.5 text-center"><Badge variant={ESTADO_VARIANT[p.estado]} className="text-[10px]">{p.estado}</Badge></td>
+                      <td className="px-3 py-1.5 text-center">
+                        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                          onClick={(e) => { e.stopPropagation(); setDeletePrestamoTarget(p); }} title="Eliminar préstamo">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -379,6 +395,10 @@ export default function Pakredito() {
         title="Eliminar abono"
         description="Se anulará el comprobante del abono (nota crédito) y se restaurará el estado del préstamo (saldos, cuotas e intereses)."
         onConfirm={eliminarAbono} />
+      <ConfirmMotivoDialog open={!!deletePrestamoTarget} onOpenChange={(v) => !v && setDeletePrestamoTarget(null)}
+        title={`Eliminar préstamo ${deletePrestamoTarget?.codigo || ""}`}
+        description={`Se anulará el comprobante de desembolso, se eliminarán sus cuotas de amortización y se anularán los abonos vinculados a este crédito. Esta acción no se puede deshacer.`}
+        onConfirm={eliminarPrestamo} />
       <ProrrocaDialog open={!!prorrocaPrestamo} onOpenChange={(v) => !v && setProrrocaPrestamo(null)}
         prestamo={prorrocaPrestamo}
         clienteNombre={prorrocaPrestamo ? clienteNombre(prorrocaPrestamo.cliente_id) : ""}

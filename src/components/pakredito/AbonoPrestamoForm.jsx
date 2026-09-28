@@ -29,7 +29,7 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
   }, [open]);
 
   const creditosCliente = useMemo(
-    () => prestamos.filter((p) => p.cliente_id === clienteId && (p.estado === "vigente" || p.estado === "en_mora")),
+    () => prestamos.filter((p) => p.cliente_id === clienteId && (p.estado === "vigente" || p.estado === "en_mora" || p.estado === "activo") && (p.saldo_capital === undefined || Number(p.saldo_capital) > 0)),
     [prestamos, clienteId]
   );
 
@@ -101,13 +101,13 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
             return {
               prestamo_id: p.id,
               valor_aplicado: Number(aplicaciones[p.id]) || 0,
-              intereses: interesesInput[p.id] !== undefined ? Number(interesesInput[p.id]) : defInteres
+              intereses: (interesesInput[p.id] !== undefined && interesesInput[p.id] !== "") ? Number(interesesInput[p.id]) : defInteres
             };
           }
           return {
             prestamo_id: p.id,
             valor_aplicado: Number(aplicaciones[p.id]) || 0,
-            intereses: Number(interesesInput[p.id] || 0)
+            intereses: (interesesInput[p.id] !== undefined && interesesInput[p.id] !== "") ? Number(interesesInput[p.id]) : 0
           };
         })
       });

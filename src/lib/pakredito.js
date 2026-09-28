@@ -41,7 +41,9 @@ export function derivarTasaDesdeCuota(capital, cuota, numeroCuotas) {
 
 export function generarAmortizacionCuotaFija(capital, tasaNominal, periodo, numeroCuotas, fechaInicio, cuotaManual) {
   let i = tasaEfectivaPeriodo(tasaNominal, periodo);
-  let cuota = capital * i / (1 - Math.pow(1 + i, -numeroCuotas));
+  let cuota = i > 0 && numeroCuotas > 0
+    ? (capital * i / (1 - Math.pow(1 + i, -numeroCuotas)))
+    : (capital / Math.max(1, numeroCuotas));
   let tasaNominalUsada = tasaNominal;
   // Cuando se asigna una cuota fija manual, la tasa se deriva de la cuota:
   // se calcula la tasa efectiva del periodo y, desde ella, la nominal mensual.

@@ -158,8 +158,12 @@ export default function AuditoriaCuadre() {
             <ResumenCard label="Comprobantes" value={data.resumen.total_comprobantes} />
             <ResumenCard label="Cuadrados" value={data.resumen.cuadrados} ok />
             <ResumenCard label="Descuadrados" value={data.resumen.descuadrados} warn />
-            <ResumenCard label="Sin movimientos" value={data.resumen.sin_movimientos} warn />
-            <ResumenCard label="Diferencia neta" value={fmt(data.resumen.diferencia_neta_debito)} warn />
+            <ResumenCard
+              label="Diferencia neta"
+              value={fmt(data.resumen.diferencia_neta !== undefined ? data.resumen.diferencia_neta : (data.resumen.diferencia_neta_credito - data.resumen.diferencia_neta_debito))}
+              ok={Math.abs(data.resumen.diferencia_neta || 0) < 1}
+              warn={Math.abs(data.resumen.diferencia_neta || 0) >= 1}
+            />
           </div>
 
           {data.huerfanos?.length > 0 && (
@@ -172,8 +176,8 @@ export default function AuditoriaCuadre() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-1 text-sm">
-                  {data.huerfanos.map((h) => (
-                    <div key={h.comprobante_id} className="flex justify-between">
+                  {data.huerfanos.map((h, idx) => (
+                    <div key={h.comprobante_id ? `${h.comprobante_id}_${idx}` : `huerfano_${idx}`} className="flex justify-between">
                       <span className="font-mono text-xs">{h.comprobante_id}</span>
                       <span>{h.cantidad_lineas} líneas · {fmt(h.total_debito)}</span>
                     </div>
@@ -195,8 +199,8 @@ export default function AuditoriaCuadre() {
                   <CheckCircle2 /> Todos los comprobantes están cuadrados.
                 </div>
               )}
-              {data.descuadres.map((d) => (
-                <div key={d.comprobante_id} className="border rounded-lg p-3 space-y-2">
+              {data.descuadres.map((d, idx) => (
+                <div key={d.comprobante_id ? `${d.comprobante_id}_${idx}` : `descuadre_${idx}`} className="border rounded-lg p-3 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <span className="font-mono font-semibold">{d.numero}</span>
