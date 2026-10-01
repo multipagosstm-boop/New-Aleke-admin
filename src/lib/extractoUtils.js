@@ -128,7 +128,25 @@ const MESES_ES = {
 };
 
 export function normalizeDate(input) {
-  if (!input) return null;
+  if (input == null || input === "") return null;
+  if (input instanceof Date) {
+    if (isNaN(input.getTime())) return null;
+    const y = input.getFullYear();
+    const m = String(input.getMonth() + 1).padStart(2, "0");
+    const d = String(input.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  if (typeof input === "number") {
+    if (input > 20000 && input < 90000) {
+      const date = new Date(Math.round((input - 25569) * 86400 * 1000));
+      if (!isNaN(date.getTime())) {
+        const y = date.getUTCFullYear();
+        const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+        const d = String(date.getUTCDate()).padStart(2, "0");
+        return `${y}-${m}-${d}`;
+      }
+    }
+  }
   const str = String(input).trim();
   if (!str || str.toLowerCase() === "inmediato") return null;
 

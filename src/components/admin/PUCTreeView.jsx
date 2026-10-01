@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useCallback } from "react";
-import { ChevronDown, ChevronRight, CheckCircle2, Pencil, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ChevronDown, ChevronRight, CheckCircle2, Pencil, Trash2, ReceiptText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -167,6 +168,13 @@ function TreeRow({ node, depth, expanded, onToggle, onEdit, onDelete }) {
           </span>
         )}
         <div className="flex items-center gap-2 shrink-0">
+          <Link
+            to={`/admin/contabilidad/detalle-cuentas?cuenta=${d.codigo}`}
+            className="text-muted-foreground hover:text-primary p-1 rounded inline-flex items-center"
+            title={`Ver detalle de movimientos de la cuenta ${d.codigo}`}
+          >
+            <ReceiptText className="w-3.5 h-3.5" />
+          </Link>
           {onEdit && (
             <button
               onClick={() => onEdit(d)}

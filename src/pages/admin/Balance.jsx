@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ const claseLabels = { activo: "Activo", pasivo: "Pasivo", patrimonio: "Patrimoni
 const claseOrder = ["activo", "pasivo", "patrimonio", "ingreso", "gasto"];
 
 export default function Balance() {
+  const navigate = useNavigate();
   const [saldos, setSaldos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [periodos, setPeriodos] = useState([]);
@@ -143,32 +145,46 @@ export default function Balance() {
                       return (
                         <React.Fragment key={cuentaKey}>
                           <tr
-                            className="border-b border-border/50 hover:bg-muted/30 cursor-pointer bg-muted/20"
-                            onClick={() => setDialogCuenta({ cuentaKey, cuentaNombre: nombreCuenta, clase, periodo: periodoSel })}
+                            className="border-b border-border/50 hover:bg-muted/30 cursor-pointer bg-muted/20 transition-colors group"
+                            onClick={() => {
+                              navigate(`/admin/contabilidad/detalle-cuentas?cuenta=${cuentaKey}&periodo=${periodoSel || ""}`);
+                            }}
+                            title={`Ver detalle cronológico de movimientos de la cuenta ${cuentaKey}`}
                           >
                             <td className="px-4 py-2" colSpan={4}>
-                              <div className="flex items-center gap-1.5">
-                                <span onClick={(e) => { e.stopPropagation(); toggleGrupo(expKey); }} className="inline-flex">
-                                  {abierto ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
-                                </span>
-                                <span className="font-mono text-xs text-primary font-semibold">{cuentaKey}</span>
-                                <span className="text-xs text-foreground/80 truncate">{nombreCuenta}</span>
-                              </div>
-                              <div className="flex justify-end gap-4 text-xs font-mono text-muted-foreground pr-1">
-                                <span>D: {formatCOP(debitoTotal)}</span>
-                                <span>C: {formatCOP(creditoTotal)}</span>
-                                <span className={cuentaTotal >= 0 ? "text-success font-medium" : "text-destructive font-medium"}>Saldo: {formatCOP(cuentaTotal)}</span>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                  <span onClick={(e) => { e.stopPropagation(); toggleGrupo(expKey); }} className="inline-flex p-0.5 rounded hover:bg-muted" title={abierto ? "Contraer subcuentas" : "Desplegar subcuentas"}>
+                                    {abierto ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
+                                  </span>
+                                  <span className="font-mono text-xs text-primary font-bold group-hover:underline">{cuentaKey}</span>
+                                  <span className="text-xs text-foreground/85 truncate font-medium">{nombreCuenta}</span>
+                                </div>
+                                <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground pr-1">
+                                  <span>D: {formatCOP(debitoTotal)}</span>
+                                  <span>C: {formatCOP(creditoTotal)}</span>
+                                  <span className={cuentaTotal >= 0 ? "text-success font-medium" : "text-destructive font-medium"}>Saldo: {formatCOP(cuentaTotal)}</span>
+                                  <span className="text-[11px] font-sans text-primary font-medium group-hover:underline inline-flex items-center gap-0.5 ml-1">
+                                    Ver Detalle <ChevronRight className="w-3 h-3" />
+                                  </span>
+                                </div>
                               </div>
                             </td>
                           </tr>
                           {abierto && subItems.map((s) => (
                             <tr
                               key={s.codigo}
-                              className="border-b border-border/30 hover:bg-muted/30 cursor-pointer"
-                              onClick={(e) => { e.stopPropagation(); setDialogCuenta({ cuentaKey: s.codigo, cuentaNombre: s.nombre, clase, periodo: periodoSel }); }}
+                              className="border-b border-border/30 hover:bg-muted/30 cursor-pointer group"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/admin/contabilidad/detalle-cuentas?cuenta=${s.codigo}&periodo=${periodoSel || ""}`);
+                              }}
+                              title={`Ver detalle cronológico de la subcuenta ${s.codigo}`}
                             >
                               <td className="px-4 py-1.5 pl-9">
-                                <div className="font-mono text-xs text-primary">{s.codigo}</div>
+                                <div className="font-mono text-xs text-primary font-semibold group-hover:underline flex items-center gap-1">
+                                  {s.codigo}
+                                </div>
                                 <div className="text-xs text-muted-foreground">{s.nombre}</div>
                               </td>
                               <td className="px-4 py-1.5 text-right font-mono text-xs">{formatCOP(s.debito)}</td>

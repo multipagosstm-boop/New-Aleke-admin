@@ -7,19 +7,22 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Plus, Search, Ban, Edit, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Plus, Search, Ban, Edit, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, Trash2, ShieldAlert, AlertTriangle } from "lucide-react";
 import { formatCOP, formatDate } from "@/lib/contabilidad";
 import { cn } from "@/lib/utils";
 import ComprobanteForm from "@/components/admin/ComprobanteForm";
 import EditarPeriodoMovimientoDialog from "@/components/admin/EditarPeriodoMovimientoDialog";
 import LibroDiarioImportExport from "@/components/admin/LibroDiarioImportExport";
 import { useAuth } from "@/lib/AuthContext";
+import { ROLES } from "@/lib/userStore";
+import { toast } from "sonner";
 
 export default function LibroDiario() {
   const [searchParams] = useSearchParams();
   const subcuentaFilter = searchParams.get("subcuenta");
-  const { can } = useAuth();
+  const { can, user: authUser } = useAuth();
   const canEditOrDelete = can('edit_delete_entries');
+  const isAdmin = authUser?.rol === ROLES.ADMINISTRADOR || can('permanent_delete_entries');
   const [comprobantes, setComprobantes] = useState([]);
   const [movimientos, setMovimientos] = useState([]);
   const [clientes, setClientes] = useState([]);
@@ -46,6 +49,15 @@ export default function LibroDiario() {
   const [loadingMovsId, setLoadingMovsId] = useState(null);
   const [sortKey, setSortKey] = useState("fecha");
   const [sortDir, setSortDir] = useState("desc");
+
+  // Estados para depuración y eliminación permanente (Exclusivo Administrador)
+  const [eliminarDialog, setEliminarDialog] = useState(null);
+  const [eliminando, setEliminando] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [seleccionados, setSeleccionados] = useState(new Set());
+  const [eliminarLoteDialog, setEliminarLoteDialog] = useState(false);
+  const [eliminandoLote, setEliminandoLote] = useState(false);
+  const [confirmLoteText, setConfirmLoteText] = useState("");
 
   // Paginación
   const [pagina, setPagina] = useState(1);
@@ -104,7 +116,15 @@ export default function LibroDiario() {
       setFormOpen(true);
       window.history.replaceState({}, "", "/admin/contabilidad/libro-diario");
     }
-  }, [searchParams, loading]);
+    const targetCompId = searchParams.get("comprobante_id");
+    if (targetCompId && !loading && comprobantes.length > 0) {
+      const found = comprobantes.find((c) => c.id === targetCompId);
+      if (found) {
+        setBusqueda(found.numero);
+        setExpanded(targetCompId);
+      }
+    }
+  }, [searchParams, loading, comprobantes]);
 
   const movsByComprobante = useMemo(() => {
     const map = {};
@@ -295,6 +315,76 @@ export default function LibroDiario() {
     setAnulando(false);
   };
 
+  const handleEliminarPermanente = async () => {
+    if (!eliminarDialog || !isAdmin) return;
+    setEliminando(true);
+    try {
+      const resp = await base44.functions.invoke("eliminarComprobantePermanente", {
+        comprobante_id: eliminarDialog.id
+      });
+      if (resp.data?.error) throw new Error(resp.data.error);
+      toast.success(`Comprobante ${eliminarDialog.numero} y sus movimientos fueron eliminados permanentemente.`);
+      setEliminarDialog(null);
+      setConfirmText("");
+      setSeleccionados((prev) => {
+        const next = new Set(prev);
+        next.delete(eliminarDialog.id);
+        return next;
+      });
+      loadData();
+    } catch (e) {
+      console.error("Error al eliminar permanentemente:", e);
+      toast.error("Error al eliminar: " + e.message);
+    } finally {
+      setEliminando(false);
+    }
+  };
+
+  const handleToggleSelect = (id) => {
+    setSeleccionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    const pageIds = itemsPagina.map((c) => c.id);
+    const todosSeleccionados = pageIds.length > 0 && pageIds.every((id) => seleccionados.has(id));
+    setSeleccionados((prev) => {
+      const next = new Set(prev);
+      if (todosSeleccionados) {
+        pageIds.forEach((id) => next.delete(id));
+      } else {
+        pageIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const handleEliminarLotePermanente = async () => {
+    if (seleccionados.size === 0 || !isAdmin) return;
+    setEliminandoLote(true);
+    try {
+      const ids = Array.from(seleccionados);
+      const resp = await base44.functions.invoke("eliminarComprobantesLotePermanente", {
+        comprobante_ids: ids
+      });
+      if (resp.data?.error) throw new Error(resp.data.error);
+      toast.success(`${resp.data.total_eliminados || ids.length} comprobantes eliminados permanentemente de la base de datos.`);
+      setSeleccionados(new Set());
+      setEliminarLoteDialog(false);
+      setConfirmLoteText("");
+      loadData();
+    } catch (e) {
+      console.error("Error al eliminar lote:", e);
+      toast.error("Error al eliminar lote: " + e.message);
+    } finally {
+      setEliminandoLote(false);
+    }
+  };
+
   const handleRecalcularSaldos = async () => {
     if (!window.confirm("¿Recalcular todos los saldos de cuentas de ahorro y tarjetas/crédito desde los movimientos contables? Útil tras eliminar movimientos manualmente."))
       return;
@@ -459,6 +549,39 @@ export default function LibroDiario() {
             )}
           </div>
         </div>
+
+        {/* Barra flotante de acciones masivas para Administrador */}
+        {isAdmin && seleccionados.size > 0 && (
+          <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs shadow-xs">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-destructive shrink-0" />
+              <span className="font-semibold text-destructive">
+                {seleccionados.size} comprobante(s) seleccionado(s) para depuración permanente
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setSeleccionados(new Set())}
+              >
+                Deseleccionar todos
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-8 text-xs gap-1.5 shadow-xs font-semibold"
+                onClick={() => {
+                  setConfirmLoteText("");
+                  setEliminarLoteDialog(true);
+                }}
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Eliminar Permanentemente ({seleccionados.size})
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       <Card ref={tableRef} className="border-border shadow-xs overflow-hidden">
@@ -467,7 +590,18 @@ export default function LibroDiario() {
             <table className="min-w-[760px] w-full text-xs sm:text-sm thead-sticky">
               <thead className="border-b border-border text-left text-xs text-muted-foreground uppercase">
                 <tr>
-                  <th className="px-3 sm:px-4 py-3 font-medium w-8"></th>
+                  {isAdmin && (
+                    <th className="px-2 py-3 w-8 text-center">
+                      <input
+                        type="checkbox"
+                        checked={itemsPagina.length > 0 && itemsPagina.every((c) => seleccionados.has(c.id))}
+                        onChange={handleToggleSelectAll}
+                        className="rounded border-input text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer align-middle"
+                        title="Seleccionar todos los de esta página"
+                      />
+                    </th>
+                  )}
+                  <th className="px-2 sm:px-3 py-3 font-medium w-8"></th>
                   <SortTh k="numero" label="Número" />
                   <SortTh k="fecha" label="Fecha" />
                   <SortTh k="tipo" label="Tipo" />
@@ -482,10 +616,21 @@ export default function LibroDiario() {
                 {itemsPagina.map((c) => {
                   const movs = movsByComprobante[c.id] || [];
                   const isExpanded = expanded === c.id;
+                  const isSelected = seleccionados.has(c.id);
                   return (
                     <React.Fragment key={c.id}>
-                      <tr className={`border-b border-border/50 hover:bg-muted/30 ${c.estado === "anulado" ? "opacity-50" : ""}`}>
-                        <td className="px-3 sm:px-4 py-2">
+                      <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${c.estado === "anulado" ? "opacity-60" : ""} ${isSelected ? "bg-primary/5" : ""}`}>
+                        {isAdmin && (
+                          <td className="px-2 py-2 text-center" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleSelect(c.id)}
+                              className="rounded border-input text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer align-middle"
+                            />
+                          </td>
+                        )}
+                        <td className="px-2 sm:px-3 py-2">
                           <button
                             type="button"
                             onClick={() => handleToggleExpand(c.id)}
@@ -508,22 +653,38 @@ export default function LibroDiario() {
                         </td>
                         {canEditOrDelete && (
                           <td className="px-3 sm:px-4 py-2 text-right">
-                            {c.estado === "contabilizado" && (
-                              <div className="flex gap-1 justify-end">
-                                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleEditComprobante(c)}>
-                                  <Edit className="w-3 h-3 mr-1" /> Modificar
+                            <div className="flex gap-1 justify-end items-center">
+                              {c.estado === "contabilizado" && (
+                                <>
+                                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleEditComprobante(c)}>
+                                    <Edit className="w-3 h-3 mr-1" /> Modificar
+                                  </Button>
+                                  <Button size="sm" variant="ghost" className="h-7 text-xs text-amber-600 dark:text-amber-400" onClick={() => { setAnularDialog(c); setMotivoAnulacion(""); }}>
+                                    <Ban className="w-3 h-3 mr-1" /> Anular
+                                  </Button>
+                                </>
+                              )}
+                              {isAdmin && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 text-xs text-destructive hover:bg-destructive/10"
+                                  onClick={() => {
+                                    setEliminarDialog(c);
+                                    setConfirmText("");
+                                  }}
+                                  title="Eliminar permanentemente de la base de datos (Exclusivo Administrador)"
+                                >
+                                  <Trash2 className="w-3 h-3 mr-1" /> Eliminar
                                 </Button>
-                                <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => { setAnularDialog(c); setMotivoAnulacion(""); }}>
-                                  <Ban className="w-3 h-3 mr-1" /> Anular
-                                </Button>
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </td>
                         )}
                       </tr>
                       {isExpanded && (
                         <tr className="bg-muted/20">
-                          <td colSpan={canEditOrDelete ? 9 : 8} className="p-2 sm:p-4">
+                          <td colSpan={canEditOrDelete ? (isAdmin ? 10 : 9) : (isAdmin ? 9 : 8)} className="p-2 sm:p-4">
                             {loadingMovsId === c.id ? (
                               <div className="py-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
                                 <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Cargando movimientos del comprobante...
@@ -564,6 +725,25 @@ export default function LibroDiario() {
                                     ))}
                                   </tbody>
                                 </table>
+                                {isAdmin && (
+                                  <div className="mt-2.5 pt-2 border-t border-border/50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                                    <span className="text-muted-foreground flex items-center gap-1.5">
+                                      <ShieldAlert className="w-3.5 h-3.5 text-destructive" />
+                                      ¿Asiento duplicado o de pruebas? Puedes eliminarlo de forma definitiva:
+                                    </span>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      className="h-7 text-xs gap-1 shadow-xs font-semibold"
+                                      onClick={() => {
+                                        setEliminarDialog(c);
+                                        setConfirmText("");
+                                      }}
+                                    >
+                                      <Trash2 className="w-3 h-3" /> Eliminar Asiento Definitivamente
+                                    </Button>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </td>
@@ -573,7 +753,7 @@ export default function LibroDiario() {
                   );
                 })}
                 {totalItems === 0 && (
-                  <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No hay comprobantes registrados.</td></tr>
+                  <tr><td colSpan={canEditOrDelete ? (isAdmin ? 10 : 9) : (isAdmin ? 9 : 8)} className="px-4 py-8 text-center text-muted-foreground">No hay comprobantes registrados.</td></tr>
                 )}
               </tbody>
             </table>
@@ -714,6 +894,118 @@ export default function LibroDiario() {
             <Button variant="outline" onClick={() => setAnularDialog(null)}>Cancelar</Button>
             <Button variant="destructive" onClick={handleAnular} disabled={anulando || !motivoAnulacion.trim()}>
               {anulando ? "Anulando..." : "Confirmar Anulación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog para Eliminar Permanentemente (Exclusivo Administrador) */}
+      <Dialog open={!!eliminarDialog} onOpenChange={(v) => !v && setEliminarDialog(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <ShieldAlert className="w-5 h-5" /> Eliminar Asiento Permanentemente
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-xs space-y-1.5 text-destructive">
+              <div className="font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> Acción Definitiva e Irreversible
+              </div>
+              <p>
+                Esta función exclusiva del <strong>Administrador</strong> eliminará FÍSICAMENTE de Supabase el comprobante <strong>{eliminarDialog?.numero}</strong> y todos sus movimientos contables vinculados.
+              </p>
+              <p>
+                Los saldos de cuentas de ahorro y tarjetas se recalcularán automáticamente tras la eliminación.
+              </p>
+            </div>
+
+            <div className="text-xs bg-muted/40 p-2.5 rounded border space-y-1 font-mono">
+              <div><strong>Comprobante:</strong> {eliminarDialog?.numero}</div>
+              <div><strong>Fecha:</strong> {formatDate(eliminarDialog?.fecha)}</div>
+              <div><strong>Tipo:</strong> {eliminarDialog?.tipo}</div>
+              <div><strong>Descripción:</strong> {eliminarDialog?.descripcion || "—"}</div>
+              <div><strong>Total Débito/Crédito:</strong> {formatCOP(eliminarDialog?.total_debito || 0)}</div>
+            </div>
+
+            <div className="space-y-1.5 pt-1">
+              <label className="text-xs font-medium text-foreground block">
+                Para confirmar la eliminación permanente, escribe la palabra <strong className="text-destructive font-mono">ELIMINAR</strong>:
+              </label>
+              <Input
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="Escribe ELIMINAR para habilitar"
+                className="h-8 font-mono text-xs"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEliminarDialog(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleEliminarPermanente}
+              disabled={eliminando || confirmText.trim().toUpperCase() !== "ELIMINAR"}
+              className="gap-1.5 font-semibold"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {eliminando ? "Eliminando de la base de datos..." : "Eliminar Definitivamente"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog para Eliminar Lote de Asientos Permanentemente (Exclusivo Administrador) */}
+      <Dialog open={eliminarLoteDialog} onOpenChange={(v) => !v && setEliminarLoteDialog(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <ShieldAlert className="w-5 h-5" /> Eliminar {seleccionados.size} Asientos en Lote
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-xs space-y-1.5 text-destructive">
+              <div className="font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> Depuración Masiva Definitiva
+              </div>
+              <p>
+                Se eliminarán de forma permanente <strong>{seleccionados.size} comprobantes contables</strong> y todas sus líneas de movimiento asociadas de la base de datos.
+              </p>
+              <p>
+                Esta acción no se puede deshacer. Los saldos globales se recalcularán una vez finalizada la operación.
+              </p>
+            </div>
+
+            <div className="space-y-1.5 pt-1">
+              <label className="text-xs font-medium text-foreground block">
+                Para confirmar la eliminación masiva, escribe <strong className="text-destructive font-mono">ELIMINAR</strong>:
+              </label>
+              <Input
+                value={confirmLoteText}
+                onChange={(e) => setConfirmLoteText(e.target.value)}
+                placeholder="Escribe ELIMINAR para habilitar"
+                className="h-8 font-mono text-xs"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEliminarLoteDialog(false)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleEliminarLotePermanente}
+              disabled={eliminandoLote || confirmLoteText.trim().toUpperCase() !== "ELIMINAR"}
+              className="gap-1.5 font-semibold"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {eliminandoLote ? "Eliminando lote..." : `Eliminar ${seleccionados.size} Asientos`}
             </Button>
           </DialogFooter>
         </DialogContent>

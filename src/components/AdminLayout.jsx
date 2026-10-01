@@ -9,6 +9,7 @@ import {
   Wallet, 
   CreditCard, 
   Receipt, 
+  ReceiptText, 
   ChevronLeft, 
   ChevronDown, 
   Building2, 
@@ -45,6 +46,7 @@ const allNavGroups = [
       { to: "/admin/contabilidad/libro-diario", label: "Libro Diario", icon: BookOpen, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR, ROLES.AUXILIAR] },
       { to: "/admin/contabilidad/carga-masiva", label: "Carga Masiva", icon: Upload, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR] },
       { to: "/admin/contabilidad/balance", label: "Balance", icon: Scale, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR] },
+      { to: "/admin/contabilidad/detalle-cuentas", label: "Detalle de Cuentas", icon: ReceiptText, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR, ROLES.AUXILIAR] },
       { to: "/admin/contabilidad/estados", label: "Estados Financieros", icon: FileText, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR] },
       { to: "/admin/contabilidad/auditoria-cuadre", label: "Auditoría de Cuadre", icon: ScanSearch, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR] }
     ]

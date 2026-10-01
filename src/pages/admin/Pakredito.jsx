@@ -4,7 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { HandCoins, Plus, RefreshCw, AlertTriangle, Loader2, Wallet, TrendingUp, Users, Clock, Search, CalendarClock, CalendarPlus } from "lucide-react";
+import { HandCoins, Plus, RefreshCw, AlertTriangle, Loader2, Wallet, TrendingUp, Users, Clock, Search, CalendarClock, CalendarPlus, Receipt, Pencil, Eye, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { formatCOP, formatDate, hoyLocal } from "@/lib/contabilidad";
 import PrestamoForm from "@/components/pakredito/PrestamoForm";
@@ -12,10 +12,19 @@ import AbonoPrestamoForm from "@/components/pakredito/AbonoPrestamoForm";
 import PrestamoDetail from "@/components/pakredito/PrestamoDetail";
 import ConfirmMotivoDialog from "@/components/pakredito/ConfirmMotivoDialog";
 import ProrrocaDialog from "@/components/pakredito/ProrrocaDialog";
-import { Trash2 } from "lucide-react";
+import AbonoDetailDialog from "@/components/pakredito/AbonoDetailDialog";
+import EditarAbonoDialog from "@/components/pakredito/EditarAbonoDialog";
 import { useToast } from "@/components/ui/use-toast";
 
 const ESTADO_VARIANT = { vigente: "secondary", saldado: "outline", en_mora: "destructive", refinanciado: "secondary" };
+
+const parseDet = (d) => {
+  if (Array.isArray(d)) return d;
+  if (typeof d === "string") {
+    try { return JSON.parse(d); } catch { return []; }
+  }
+  return [];
+};
 
 export default function Pakredito() {
   const [clientes, setClientes] = useState([]);
@@ -33,6 +42,8 @@ export default function Pakredito() {
   const [deleteAbonoId, setDeleteAbonoId] = useState(null);
   const [deletePrestamoTarget, setDeletePrestamoTarget] = useState(null);
   const [prorrocaPrestamo, setProrrocaPrestamo] = useState(null);
+  const [viewAbono, setViewAbono] = useState(null);
+  const [editAbono, setEditAbono] = useState(null);
   const [busquedaPrestamos, setBusquedaPrestamos] = useState("");
   const [busquedaAbonos, setBusquedaAbonos] = useState("");
   const { toast } = useToast();
@@ -75,17 +86,33 @@ export default function Pakredito() {
   };
 
   const eliminarAbono = async (motivo) => {
-    await base44.functions.invoke("gestionarPakredito", { accion: "eliminarAbono", abono_id: deleteAbonoId, motivo });
-    toast({ title: "Abono eliminado", description: "Se revirtió el comprobante y el estado del préstamo." });
-    await loadData();
+    try {
+      const res = await base44.functions.invoke("gestionarPakredito", { accion: "eliminarAbono", abono_id: deleteAbonoId, motivo });
+      const r = res?.data || res;
+      if (r?.success === false || r?.error) {
+        throw new Error(r?.error || "Error al eliminar abono");
+      }
+      toast({ title: "Abono eliminado", description: "Se revirtió el comprobante y el estado del préstamo con éxito." });
+      setDeleteAbonoId(null);
+      await loadData();
+    } catch (err) {
+      console.error("Error al eliminar abono:", err);
+      toast({ variant: "destructive", title: "Error", description: err.message || "No se pudo eliminar el abono" });
+      throw err;
+    }
   };
 
   const eliminarPrestamo = async (motivo) => {
     if (!deletePrestamoTarget) return;
-    await base44.functions.invoke("gestionarPakredito", { accion: "eliminarPrestamo", prestamo_id: deletePrestamoTarget.id, motivo });
-    toast({ title: "Préstamo eliminado", description: `Se anuló el comprobante y registros de ${deletePrestamoTarget.codigo}.` });
-    setDeletePrestamoTarget(null);
-    await loadData();
+    try {
+      await base44.functions.invoke("gestionarPakredito", { accion: "eliminarPrestamo", prestamo_id: deletePrestamoTarget.id, motivo });
+      toast({ title: "Préstamo eliminado", description: `Se anuló el comprobante y registros de ${deletePrestamoTarget.codigo}.` });
+      setDeletePrestamoTarget(null);
+      await loadData();
+    } catch (err) {
+      console.error("Error al eliminar préstamo:", err);
+      toast({ variant: "destructive", title: "Error", description: err.message || "No se pudo eliminar el préstamo" });
+    }
   };
 
   const hoy = hoyLocal();
@@ -120,7 +147,8 @@ export default function Pakredito() {
     if (!busquedaAbonos.trim()) return abonos;
     const q = normalizar(busquedaAbonos);
     return abonos.filter((a) => {
-      const cods = (a.detalles || []).map((d) => prestamos.find((p) => p.id === d.prestamo_id)?.codigo || "").join(" ");
+      const dList = parseDet(a.detalles);
+      const cods = dList.map((d) => prestamos.find((p) => String(p.id) === String(d.prestamo_id))?.codigo || "").join(" ");
       return normalizar(clienteNombre(a.cliente_id)).includes(q) || normalizar(cods).includes(q);
     });
   }, [abonos, busquedaAbonos, clientes, prestamos]);
@@ -358,25 +386,70 @@ export default function Pakredito() {
                     <th className="px-3 py-2 font-medium">Cliente</th>
                     <th className="px-3 py-2 font-medium text-right">Valor</th>
                     <th className="px-3 py-2 font-medium">Créditos abonados</th>
-                    <th className="px-3 py-2 font-medium w-10"></th>
+                    <th className="px-3 py-2 font-medium text-center">Asiento</th>
+                    <th className="px-3 py-2 font-medium text-center w-28">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {abonosFiltrados.length === 0 ? (
-                    <tr><td colSpan={5} className="px-3 py-4 text-center text-muted-foreground text-sm">Sin abonos registrados.</td></tr>
-                  ) : abonosFiltrados.map((a) => (
-                    <tr key={a.id} className="border-b border-border/50 hover:bg-muted/30">
-                      <td className="px-3 py-1.5 font-mono text-xs">{formatDate(a.fecha)}</td>
-                      <td className="px-3 py-1.5">{clienteNombre(a.cliente_id)}</td>
-                      <td className="px-3 py-1.5 text-right font-mono">{formatCOP(a.valor_total)}</td>
-                      <td className="px-3 py-1.5 text-xs text-muted-foreground">{(a.detalles || []).map((d) => prestamos.find((p) => p.id === d.prestamo_id)?.codigo || "?").join(", ")}</td>
-                      <td className="px-3 py-1.5 text-center">
-                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setDeleteAbonoId(a.id)} title="Eliminar abono">
-                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                    <tr><td colSpan={6} className="px-3 py-4 text-center text-muted-foreground text-sm">Sin abonos registrados.</td></tr>
+                  ) : abonosFiltrados.map((a) => {
+                    const dList = parseDet(a.detalles);
+                    const codigos = dList.map((d) => prestamos.find((p) => String(p.id) === String(d.prestamo_id))?.codigo || "?").join(", ");
+                    return (
+                      <tr
+                        key={a.id}
+                        className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
+                        onClick={() => setViewAbono(a)}
+                      >
+                        <td className="px-3 py-1.5 font-mono text-xs">{formatDate(a.fecha)}</td>
+                        <td className="px-3 py-1.5 font-medium">{clienteNombre(a.cliente_id)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold">{formatCOP(a.valor_total)}</td>
+                        <td className="px-3 py-1.5 text-xs text-muted-foreground">{codigos || "—"}</td>
+                        <td className="px-3 py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 text-[11px] px-2 text-primary"
+                            onClick={() => setViewAbono(a)}
+                          >
+                            <Receipt className="w-3 h-3 mr-1" /> Ver asiento
+                          </Button>
+                        </td>
+                        <td className="px-3 py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              onClick={() => setViewAbono(a)}
+                              title="Ver detalle del abono y asiento contable"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              onClick={() => setEditAbono(a)}
+                              title="Modificar abono"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                              onClick={() => setDeleteAbonoId(a.id)}
+                              title="Eliminar abono"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </CardContent>
@@ -390,7 +463,29 @@ export default function Pakredito() {
         clientes={clientesPakredito} cuentasAhorro={cdas} prestamos={prestamos} />
       <PrestamoDetail open={!!detailPrestamo} onOpenChange={(v) => !v && setDetailPrestamo(null)}
         prestamo={detailPrestamo} clienteNombre={detailPrestamo ? clienteNombre(detailPrestamo.cliente_id) : ""}
+        prestamos={prestamos}
+        clientes={clientes}
         onChanged={loadData} />
+      
+      <AbonoDetailDialog
+        open={!!viewAbono}
+        onOpenChange={(v) => !v && setViewAbono(null)}
+        abono={viewAbono}
+        prestamos={prestamos}
+        clientes={clientes}
+        onEdit={(ab) => { setViewAbono(null); setEditAbono(ab); }}
+        onDelete={(ab) => { setViewAbono(null); setDeleteAbonoId(ab.id); }}
+      />
+
+      <EditarAbonoDialog
+        open={!!editAbono}
+        onOpenChange={(v) => !v && setEditAbono(null)}
+        abono={editAbono}
+        prestamos={prestamos}
+        clientes={clientes}
+        onSaved={loadData}
+      />
+
       <ConfirmMotivoDialog open={!!deleteAbonoId} onOpenChange={(v) => !v && setDeleteAbonoId(null)}
         title="Eliminar abono"
         description="Se anulará el comprobante del abono (nota crédito) y se restaurará el estado del préstamo (saldos, cuotas e intereses)."

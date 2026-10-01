@@ -500,10 +500,11 @@ export function checkPermission(user, action) {
     switch (action) {
       case 'manage_users': // Exclusivo de administrador
       case 'configure_supabase': // Exclusivo de administrador
+      case 'permanent_delete_entries': // Exclusivo de administrador (depuración permanente)
       case 'system_settings':
         return false;
       case 'access_financials': // Plan de cuentas, balance, auditoría de cuadre, metas
-      case 'edit_delete_entries': // Eliminar y corregir asientos contables
+      case 'edit_delete_entries': // Anular y corregir asientos contables
       case 'edit_delete_products': // Eliminar o editar tarjetas, cuentas de ahorro, préstamos, abonos
       case 'create_entries':
       case 'view_dashboard':
@@ -522,6 +523,7 @@ export function checkPermission(user, action) {
     switch (action) {
       case 'manage_users': // Denegado
       case 'configure_supabase': // Denegado
+      case 'permanent_delete_entries': // Denegado
       case 'system_settings': // Denegado
       case 'access_financials': // Denegado (No plan de cuentas, no balance, no auditoría, no metas)
       case 'edit_delete_entries': // Denegado (no puede eliminar asientos)

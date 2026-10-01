@@ -114,7 +114,11 @@ export default function CargaMasiva() {
         setError(`Faltan columnas obligatorias: ${faltantes.join(", ")}`);
         return;
       }
-      setDatos(rows);
+      const cleaned = rows.map((r) => ({
+        ...r,
+        fecha: fechaToString(r.fecha) || new Date().toISOString().split("T")[0]
+      }));
+      setDatos(cleaned);
     } catch (e) { setError("Error al leer el archivo: " + e.message); }
   };
 
@@ -122,14 +126,25 @@ export default function CargaMasiva() {
     if (!datos) return;
     setProcesando(true);
     setError("");
+    toast.loading("Procesando carga masiva de movimientos...", { id: "carga-masiva" });
     try {
-      const resp = await base44.functions.invoke("procesarCargaMasiva", { movimientos: datos });
+      const cleanedMovimientos = datos.map((r) => ({
+        ...r,
+        fecha: fechaToString(r.fecha) || new Date().toISOString().split("T")[0]
+      }));
+      const resp = await base44.functions.invoke("procesarCargaMasiva", { movimientos: cleanedMovimientos });
       if (resp.data?.error) throw new Error(resp.data.error);
-      setResultado(resp.data);
+      const resData = resp.data || resp;
+      setResultado(resData);
       setDatos(null);
       if (fileRef.current) fileRef.current.value = "";
       setFileName("");
-    } catch (e) { setError("Error: " + e.message); }
+      const timeStr = resData.duracion_ms ? ` en ${(resData.duracion_ms / 1000).toFixed(1)}s` : "";
+      toast.success(`Carga masiva completada: ${resData.creados} comprobantes creados (${resData.total_movimientos || 0} movimientos)${timeStr}`, { id: "carga-masiva" });
+    } catch (e) {
+      setError("Error: " + e.message);
+      toast.error("Error al procesar: " + e.message, { id: "carga-masiva" });
+    }
     setProcesando(false);
   };
 
@@ -319,9 +334,15 @@ export default function CargaMasiva() {
       {resultado && (
         <Card>
           <CardContent className="p-4 space-y-3">
-            <div className="flex items-center gap-3">
-              <h3 className="font-medium">Resultado</h3>
-              <Badge className="bg-success/15 text-success">{resultado.creados} creados</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-medium mr-1">Resultado:</h3>
+              <Badge className="bg-success/15 text-success">{resultado.creados} comprobantes creados</Badge>
+              {resultado.total_movimientos ? (
+                <Badge variant="outline" className="font-mono text-xs">{resultado.total_movimientos} movimientos</Badge>
+              ) : null}
+              {resultado.duracion_ms ? (
+                <Badge variant="secondary" className="font-mono text-xs">{(resultado.duracion_ms / 1000).toFixed(1)}s</Badge>
+              ) : null}
               {resultado.fallidos > 0 && <Badge className="bg-destructive/15 text-destructive">{resultado.fallidos} fallidos</Badge>}
             </div>
             {resultado.resultados?.map((r, i) => (

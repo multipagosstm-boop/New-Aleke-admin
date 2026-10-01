@@ -21,6 +21,7 @@ import PlanCuentas from "@/pages/admin/PlanCuentas";
 import LibroDiario from "@/pages/admin/LibroDiario";
 import CargaMasiva from "@/pages/admin/CargaMasiva";
 import Balance from "@/pages/admin/Balance";
+import DetalleCuentas from "@/pages/admin/DetalleCuentas";
 import Estados from "@/pages/admin/Estados";
 import CuentasAhorro from "@/pages/admin/CuentasAhorro";
 import Tarjetas from "@/pages/admin/Tarjetas";
@@ -104,6 +105,14 @@ const AuthenticatedApp = () => {
               element={
                 <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR]} moduleName="Balance General">
                   <Balance />
+                </RoleGatedRoute>
+              } 
+            />
+            <Route 
+              path="/admin/contabilidad/detalle-cuentas" 
+              element={
+                <RoleGatedRoute allowedRoles={[ROLES.ADMINISTRADOR, ROLES.CONTADOR, ROLES.AUXILIAR]} moduleName="Detalle de Cuentas">
+                  <DetalleCuentas />
                 </RoleGatedRoute>
               } 
             />

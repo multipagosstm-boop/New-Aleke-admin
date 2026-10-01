@@ -28,8 +28,7 @@ export async function calcularTotales(entities, payload = {}) {
   let totalCreditoComprobantes = 0;
 
   for (const c of (comprobantes || [])) {
-    if (c.estado !== "contabilizado") continue;
-    if (idsNotasAnulacion.has(c.id)) continue;
+    if (c.estado === "anulado") continue;
     if (periodo && !c.fecha?.startsWith(periodo)) continue;
     totalDebitoComprobantes += Number(c.total_debito) || 0;
     totalCreditoComprobantes += Number(c.total_credito) || 0;
@@ -226,7 +225,8 @@ export async function auditarCuadre(entities, payload = {}) {
 
 export async function createComprobante(entities, payload = {}) {
   const { fecha, tipo = "diario", descripcion = "", movimientos = [], soporte_url = "" } = payload;
-  const year = fecha ? new Date(fecha).getFullYear() : new Date().getFullYear();
+  const cleanFecha = normalizeDate(fecha) || new Date().toISOString().split('T')[0];
+  const year = cleanFecha ? parseInt(cleanFecha.substring(0, 4), 10) : new Date().getFullYear();
   
   const consecs = await entities.Consecutivo.filter({ año: year, tipo: "comprobante" });
   let nextNum = 1;
@@ -248,12 +248,13 @@ export async function createComprobante(entities, payload = {}) {
 
   const comprobante = await entities.ComprobanteContable.create({
     numero,
-    fecha: fecha || new Date().toISOString().split('T')[0],
+    fecha: cleanFecha,
     tipo,
     descripcion,
     estado: "contabilizado",
     total_debito: debitoTotal,
-    total_credito: creditoTotal
+    total_credito: creditoTotal,
+    soporte_url
   });
 
   const createdMovs = [];
@@ -266,6 +267,8 @@ export async function createComprobante(entities, payload = {}) {
   const pucMap = {};
   (pucList || []).forEach((c) => { pucMap[String(c.codigo)] = c; });
 
+  const periodoOp = cleanFecha.substring(0, 7);
+
   for (const m of movimientos) {
     const cuentaPuc = pucMap[String(m.subcuenta)] || {};
     const mov = await entities.MovimientoContable.create({
@@ -275,9 +278,9 @@ export async function createComprobante(entities, payload = {}) {
       clase: m.clase || cuentaPuc.clase || (cuentaPuc.tipo_naturaleza || "activo"),
       grupo: m.grupo || String(cuentaPuc.grupo || ""),
       cuenta: m.cuenta || String(cuentaPuc.cuenta || ""),
-      periodo_operacion: (fecha || comprobante.fecha || "").substring(0, 7),
+      periodo_operacion: periodoOp,
       estado: "activo",
-      fecha: comprobante.fecha
+      fecha: cleanFecha
     });
     createdMovs.push(mov);
   }
@@ -416,6 +419,142 @@ export async function anularComprobante(entities, payload = {}) {
   });
 
   return { success: true };
+}
+
+export async function eliminarComprobantePermanente(entities, payload = {}) {
+  const { comprobante_id } = payload;
+  if (!comprobante_id) {
+    return { success: false, error: "ID de comprobante requerido" };
+  }
+
+  const comp = await entities.ComprobanteContable.get(comprobante_id).catch(() => null);
+  const numeroComp = comp?.numero || comprobante_id;
+
+  // 1. Eliminar notas de crédito espejo vinculadas (si las hay)
+  try {
+    const notasHijas = await entities.ComprobanteContable.filter({ comprobante_origen_id: comprobante_id });
+    if (notasHijas && notasHijas.length > 0) {
+      for (const nota of notasHijas) {
+        const movsNota = await entities.MovimientoContable.filter({ comprobante_id: nota.id });
+        if (movsNota?.length > 0) {
+          await entities.MovimientoContable.bulkDelete(movsNota.map(m => m.id));
+        }
+        const histNota = await entities.HistoricoContable.filter({ comprobante_id: nota.id });
+        if (histNota?.length > 0) {
+          await entities.HistoricoContable.bulkDelete(histNota.map(h => h.id));
+        }
+        await entities.ComprobanteContable.delete(nota.id);
+      }
+    }
+  } catch (errNotas) {
+    console.warn("Advertencia eliminando notas hijas vinculadas:", errNotas);
+  }
+
+  // 2. Eliminar movimientos contables del comprobante
+  let totalMovsEliminados = 0;
+  try {
+    const movs = await entities.MovimientoContable.filter({ comprobante_id });
+    if (movs && movs.length > 0) {
+      totalMovsEliminados = movs.length;
+      await entities.MovimientoContable.bulkDelete(movs.map(m => m.id));
+      await entities.MovimientoContable.deleteMany({ comprobante_id });
+    }
+  } catch (errMovs) {
+    console.warn("Advertencia eliminando movimientos:", errMovs);
+  }
+
+  // 3. Eliminar histórico contable del comprobante
+  try {
+    const hist = await entities.HistoricoContable.filter({ comprobante_id });
+    if (hist && hist.length > 0) {
+      await entities.HistoricoContable.bulkDelete(hist.map(h => h.id));
+      await entities.HistoricoContable.deleteMany({ comprobante_id });
+    }
+  } catch (errHist) {
+    console.warn("Advertencia eliminando histórico:", errHist);
+  }
+
+  // 4. Eliminar el comprobante contable físico
+  try {
+    await entities.ComprobanteContable.delete(comprobante_id);
+  } catch (errComp) {
+    console.warn("Advertencia eliminando comprobante:", errComp);
+  }
+
+  // 5. Recalcular saldos de inmediato para que los balances y extractos queden al día
+  try {
+    await recalcularSaldos(entities);
+  } catch (errRecalc) {
+    console.warn("Advertencia recalculando saldos tras eliminación:", errRecalc);
+  }
+
+  return {
+    success: true,
+    numero: numeroComp,
+    comprobante_id,
+    movimientos_eliminados: totalMovsEliminados,
+    mensaje: `Comprobante ${numeroComp} y ${totalMovsEliminados} movimientos eliminados permanentemente.`
+  };
+}
+
+export async function eliminarComprobantesLotePermanente(entities, payload = {}) {
+  const { comprobante_ids = [] } = payload;
+  if (!Array.isArray(comprobante_ids) || comprobante_ids.length === 0) {
+    return { success: false, error: "Lista de IDs de comprobantes vacía" };
+  }
+
+  const resultados = [];
+  const errores = [];
+
+  for (const compId of comprobante_ids) {
+    try {
+      // Eliminar notas hijas
+      const notasHijas = await entities.ComprobanteContable.filter({ comprobante_origen_id: compId }).catch(() => []);
+      for (const nota of (notasHijas || [])) {
+        const movsNota = await entities.MovimientoContable.filter({ comprobante_id: nota.id }).catch(() => []);
+        if (movsNota?.length > 0) await entities.MovimientoContable.bulkDelete(movsNota.map(m => m.id));
+        const histNota = await entities.HistoricoContable.filter({ comprobante_id: nota.id }).catch(() => []);
+        if (histNota?.length > 0) await entities.HistoricoContable.bulkDelete(histNota.map(h => h.id));
+        await entities.ComprobanteContable.delete(nota.id);
+      }
+
+      // Eliminar movimientos
+      const movs = await entities.MovimientoContable.filter({ comprobante_id: compId }).catch(() => []);
+      if (movs?.length > 0) {
+        await entities.MovimientoContable.bulkDelete(movs.map(m => m.id));
+        await entities.MovimientoContable.deleteMany({ comprobante_id: compId });
+      }
+
+      // Eliminar históricos
+      const hist = await entities.HistoricoContable.filter({ comprobante_id: compId }).catch(() => []);
+      if (hist?.length > 0) {
+        await entities.HistoricoContable.bulkDelete(hist.map(h => h.id));
+        await entities.HistoricoContable.deleteMany({ comprobante_id: compId });
+      }
+
+      // Eliminar comprobante
+      await entities.ComprobanteContable.delete(compId);
+
+      resultados.push(compId);
+    } catch (err) {
+      errores.push({ id: compId, error: err.message });
+    }
+  }
+
+  // Recalcular saldos una sola vez al final de todo el lote
+  try {
+    await recalcularSaldos(entities);
+  } catch (errRecalc) {
+    console.warn("Advertencia recalculando saldos tras eliminación por lote:", errRecalc);
+  }
+
+  return {
+    success: true,
+    total_solicitados: comprobante_ids.length,
+    total_eliminados: resultados.length,
+    fallidos: errores.length,
+    errores
+  };
 }
 
 export async function recalcularTotalesComprobante(entities, payload = {}) {
@@ -775,6 +914,14 @@ export async function gestionarPakredito(entities, payload = {}) {
     const abono = await entities.AbonoPrestamo.get(abonoId);
     if (!abono) return { success: false, error: "Abono no encontrado" };
 
+    const parseDet = (d) => {
+      if (Array.isArray(d)) return d;
+      if (typeof d === "string") {
+        try { return JSON.parse(d); } catch { return []; }
+      }
+      return [];
+    };
+
     // 1. Anular el comprobante contable y sus movimientos
     if (abono.comprobante_id) {
       await anularComprobante(entities, {
@@ -784,7 +931,8 @@ export async function gestionarPakredito(entities, payload = {}) {
     }
 
     // 2. Revertir saldo en los préstamos y cuotas
-    for (const d of (abono.detalles || [])) {
+    const detallesAbono = parseDet(abono.detalles);
+    for (const d of detallesAbono) {
       const p = await entities.Prestamo.get(d.prestamo_id);
       if (!p) continue;
 
@@ -821,8 +969,16 @@ export async function gestionarPakredito(entities, payload = {}) {
 
       const nuevoEstado = saldoRestaurado <= 0 ? "saldado" : (fechaProximoPago && fechaProximoPago < hoy ? "en_mora" : "vigente");
 
+      // Buscar fecha del abono anterior más reciente si existe
+      const todosAbonosCliente = await entities.AbonoPrestamo.filter({ cliente_id: p.cliente_id });
+      const restantes = (todosAbonosCliente || [])
+        .filter((oa) => oa.id !== abono.id && parseDet(oa.detalles).some((x) => String(x.prestamo_id) === String(p.id)))
+        .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+      const ultFecha = restantes.length > 0 ? restantes[0].fecha : null;
+
       await entities.Prestamo.update(p.id, {
         saldo_capital: saldoRestaurado,
+        fecha_ultimo_abono: ultFecha,
         fecha_proximo_pago: fechaProximoPago,
         valor_proximo_pago: valorProximoPago,
         saldo_intereses: p.modelo === "mes_vencido" ? saldoIntereses : 0,
@@ -835,6 +991,227 @@ export async function gestionarPakredito(entities, payload = {}) {
 
     await recalcularSaldos(entities);
     return { success: true };
+  }
+
+  // 3.1 MODIFICAR ABONO
+  if (accion === "editarAbono") {
+    const abonoId = params.abono_id || params.id;
+    if (!abonoId) throw new Error("ID de abono requerido");
+    const abono = await entities.AbonoPrestamo.get(abonoId);
+    if (!abono) return { success: false, error: "Abono no encontrado" };
+
+    const parseDet = (d) => {
+      if (Array.isArray(d)) return d;
+      if (typeof d === "string") {
+        try { return JSON.parse(d); } catch { return []; }
+      }
+      return [];
+    };
+
+    const {
+      fecha: nuevaFecha,
+      valor_total: nuevoValorTotal,
+      cuenta_ingreso: nuevaCuentaIngreso,
+      detalles: nuevosDetalles,
+      notas: nuevasNotas,
+      motivo
+    } = params;
+
+    // 1. Revertir saldo anterior en los préstamos y cuotas
+    const detallesViejos = parseDet(abono.detalles);
+    for (const d of detallesViejos) {
+      const p = await entities.Prestamo.get(d.prestamo_id);
+      if (!p) continue;
+      const valorAplicado = Number(d.valor_aplicado) || 0;
+      const intereses = Number(d.intereses) || 0;
+      const capitalAbono = d.capital !== undefined ? Number(d.capital) : Math.max(0, valorAplicado - intereses);
+      const saldoRestaurado = (Number(p.saldo_capital) || 0) + capitalAbono;
+
+      if (p.modelo === "cuota_fija") {
+        const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+        for (const c of (cuotas || [])) {
+          if (c.abono_id === abono.id) {
+            await entities.CuotaAmortizacion.update(c.id, {
+              valor_pagado: 0,
+              estado: "pendiente",
+              fecha_pago: null,
+              abono_id: null
+            });
+          }
+        }
+      }
+      await entities.Prestamo.update(p.id, {
+        saldo_capital: saldoRestaurado,
+        estado: saldoRestaurado <= 0 ? "saldado" : "vigente"
+      });
+    }
+
+    // 2. Preparar nuevos valores
+    const fechaDoc = nuevaFecha || abono.fecha || hoy;
+    const detallesFinales = nuevosDetalles && nuevosDetalles.length > 0 ? nuevosDetalles : detallesViejos;
+    const totalVal = Number(nuevoValorTotal) || detallesFinales.reduce((s, d) => s + (Number(d.valor_aplicado) || 0), 0);
+    const subcuentaIngreso = nuevaCuentaIngreso?.subcuenta ? String(nuevaCuentaIngreso.subcuenta) : abono.subcuenta_ingreso;
+    const cdaId = nuevaCuentaIngreso?.cuenta_ahorro_id !== undefined ? nuevaCuentaIngreso.cuenta_ahorro_id : abono.cda_id;
+
+    const cliente = await entities.Cliente.get(abono.cliente_id);
+
+    // 3. Modificar el comprobante contable si existe
+    if (abono.comprobante_id) {
+      const prestamosMap = {};
+      const codigosAbonados = [];
+      for (const d of detallesFinales) {
+        const p = await entities.Prestamo.get(d.prestamo_id);
+        if (p) {
+          prestamosMap[d.prestamo_id] = p;
+          if (p.codigo) codigosAbonados.push(p.codigo);
+        }
+      }
+
+      const movDebito = {
+        subcuenta: subcuentaIngreso,
+        debito: totalVal,
+        credito: 0,
+        descripcion: `Abono pakredito — ${cliente?.nombre || ""}`,
+        tercero: cliente?.nombre || "",
+        cliente_id: abono.cliente_id,
+        cuenta_ahorro_id: cdaId || null
+      };
+
+      const movsCredito = [];
+      for (const d of detallesFinales) {
+        const p = prestamosMap[d.prestamo_id];
+        const val = Number(d.valor_aplicado) || 0;
+        const intVal = Math.round(Number(d.intereses) || 0);
+        const cap = Math.max(0, val - intVal);
+
+        if (cap > 0) {
+          movsCredito.push({
+            subcuenta: p?.subcuenta_cartera || "120506",
+            debito: 0,
+            credito: cap,
+            descripcion: `Abono capital ${p?.codigo || ""}`,
+            tercero: cliente?.nombre || "",
+            cliente_id: abono.cliente_id
+          });
+        }
+        if (intVal > 0) {
+          movsCredito.push({
+            subcuenta: p?.subcuenta_intereses || "410503",
+            debito: 0,
+            credito: intVal,
+            descripcion: `Intereses ${p?.codigo || ""}`,
+            tercero: cliente?.nombre || "",
+            cliente_id: abono.cliente_id
+          });
+        }
+      }
+
+      const descComp = `Abono pakredito — ${cliente?.nombre || ""}${codigosAbonados.length ? ` (${codigosAbonados.join(", ")})` : ""}`;
+
+      await modificarComprobante(entities, {
+        comprobante_id: abono.comprobante_id,
+        fecha: fechaDoc,
+        descripcion: descComp,
+        movimientos: [movDebito, ...movsCredito],
+        motivo: motivo || "Modificación de abono Pakredito"
+      });
+    }
+
+    // 4. Aplicar nuevos saldos a préstamos y cuotas
+    for (const d of detallesFinales) {
+      const p = await entities.Prestamo.get(d.prestamo_id);
+      if (!p) continue;
+      const val = Number(d.valor_aplicado) || 0;
+      const intVal = Number(d.intereses) || 0;
+      const cap = Math.max(0, val - intVal);
+
+      const nuevoSaldoCapital = Math.max(0, (Number(p.saldo_capital) || 0) - cap);
+      let fechaProximoPago = p.fecha_proximo_pago;
+      let valorProximoPago = p.valor_proximo_pago;
+      let nuevoSaldoIntereses = p.saldo_intereses || 0;
+
+      if (p.modelo === "cuota_fija") {
+        const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+        const cuotasOrdenadas = (cuotas || []).sort((a, b) => (Number(a.numero) || 0) - (Number(b.numero) || 0));
+
+        let rem = val;
+        for (const c of cuotasOrdenadas) {
+          if (rem <= 0 && nuevoSaldoCapital > 0) break;
+          if (c.estado === "pagada") continue;
+
+          if (nuevoSaldoCapital <= 0) {
+            await entities.CuotaAmortizacion.update(c.id, {
+              valor_pagado: c.cuota,
+              estado: "pagada",
+              fecha_pago: fechaDoc,
+              abono_id: abono.id
+            });
+            continue;
+          }
+
+          const falta = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
+          if (falta <= 0) continue;
+          const pago = Math.min(rem, falta);
+          const nuevoPagado = (Number(c.valor_pagado) || 0) + pago;
+          const yaPagada = nuevoPagado >= ((Number(c.cuota) || 0) - 0.01);
+          await entities.CuotaAmortizacion.update(c.id, {
+            valor_pagado: nuevoPagado,
+            estado: yaPagada ? "pagada" : "pendiente",
+            fecha_pago: fechaDoc,
+            abono_id: abono.id
+          });
+          rem -= pago;
+        }
+
+        const cuotasActualizadas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+        const prox = (cuotasActualizadas || []).sort((a, b) => a.numero - b.numero).find((c) => c.estado !== "pagada");
+        fechaProximoPago = prox ? prox.fecha_vencimiento : null;
+        valorProximoPago = prox ? Math.max(0, (Number(prox.cuota) || 0) - (Number(prox.valor_pagado) || 0)) : 0;
+      } else if (p.modelo === "mes_vencido") {
+        nuevoSaldoIntereses = Math.max(0, (Number(p.saldo_intereses) || 0) - intVal);
+        valorProximoPago = nuevoSaldoCapital > 0 ? (nuevoSaldoCapital * (Number(p.tasa_nominal) || 0)) : 0;
+      }
+
+      let nuevoEstado = "vigente";
+      if (nuevoSaldoCapital <= 0) {
+        nuevoEstado = "saldado";
+        fechaProximoPago = null;
+        valorProximoPago = 0;
+      } else if (fechaProximoPago && fechaProximoPago < hoy) {
+        nuevoEstado = "en_mora";
+      }
+
+      await entities.Prestamo.update(p.id, {
+        saldo_capital: nuevoSaldoCapital,
+        fecha_ultimo_abono: fechaDoc,
+        saldo_intereses: p.modelo === "mes_vencido" ? nuevoSaldoIntereses : 0,
+        fecha_proximo_pago: fechaProximoPago,
+        valor_proximo_pago: valorProximoPago,
+        estado: nuevoEstado
+      });
+    }
+
+    // 5. Actualizar el registro AbonoPrestamo
+    const updatedAbono = await entities.AbonoPrestamo.update(abono.id, {
+      fecha: fechaDoc,
+      valor_total: totalVal,
+      subcuenta_ingreso: subcuentaIngreso,
+      cda_id: cdaId || null,
+      detalles: detallesFinales.map((d) => {
+        const val = Number(d.valor_aplicado) || 0;
+        const intVal = Number(d.intereses) || 0;
+        return {
+          prestamo_id: d.prestamo_id,
+          valor_aplicado: val,
+          intereses: intVal,
+          capital: Math.max(0, val - intVal)
+        };
+      }),
+      notas: nuevasNotas !== undefined ? nuevasNotas : abono.notas
+    });
+
+    await recalcularSaldos(entities);
+    return { success: true, abono: updatedAbono };
   }
 
   // 4. ELIMINAR PRÉSTAMO
@@ -1300,83 +1677,174 @@ export async function recalcularSaldos(entities) {
 
 export async function calcularEstadoExtractos(entities, payload = {}) {
   const { producto_id, producto_ids } = payload || {};
-  const query = { estado: "pendiente_pago" };
-  if (producto_id) {
-    query.producto_id = producto_id;
-  } else if (producto_ids && producto_ids.length > 0) {
-    query.producto_id = { $in: producto_ids };
-  }
-
-  const extractos = await entities.ExtractoProducto.filter(query);
   const today = new Date().toISOString().substring(0, 10);
   const warnings = [];
   const resultados = [];
 
-  for (const ext of (extractos || [])) {
-    const prod = await entities.ProductoCredito.get(ext.producto_id);
-    const fechaCorte = Math.floor(prod?.fecha_corte || 1);
-    const periodo = ext.periodo || "";
-    const [anioP, mesP] = periodo.split("-").map(Number);
+  // Helper local para desplazar meses en formato YYYY-MM-DD
+  const shiftMonthStr = (strDate, deltaMonths) => {
+    if (!strDate) return "";
+    const parts = strDate.split("-").map(Number);
+    const y = parts[0] || 2026;
+    const m = parts[1] || 1;
+    const d = parts[2] || 1;
+    const dt = new Date(y, m - 1 + deltaMonths, d);
+    const yy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const maxDays = new Date(yy, dt.getMonth() + 1, 0).getDate();
+    const dd = String(Math.min(d, maxDays)).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  };
 
-    let inicio, fin;
-    if (anioP && mesP) {
-      let cAnio = anioP, cMes = mesP - 1;
-      if (cMes === 0) { cMes = 12; cAnio -= 1; }
-      inicio = `${cAnio}-${String(cMes).padStart(2, "0")}-${String(fechaCorte).padStart(2, "0")}`;
-      const proximoCorte = `${anioP}-${String(mesP).padStart(2, "0")}-${String(fechaCorte).padStart(2, "0")}`;
-      fin = today < proximoCorte ? today : proximoCorte;
-    } else {
-      inicio = today;
-      fin = today;
-    }
+  // 1. CARGA EN PARALELO ULTRA-RÁPIDA (1 sola ronda de red en lugar de N llamadas secuenciales)
+  const [extractosTodos, prodsTodos, movsTodos] = await Promise.all([
+    entities.ExtractoProducto.list("-periodo", 2000),
+    entities.ProductoCredito.list(),
+    entities.MovimientoContable.list("-fecha", 15000)
+  ]);
 
-    const batch = await entities.MovimientoContable.filter({
-      producto_credito_id: ext.producto_id,
-      tipo_movimiento_tdc: "abono",
-      estado: "activo",
-      fecha: { $gte: inicio, $lte: fin }
-    }, "-fecha", 1000);
+  const prodMap = new Map((prodsTodos || []).map((p) => [p.id, p]));
+  const subcuentaToProd = new Map();
+  (prodsTodos || []).forEach((p) => {
+    if (p.subcuenta_puc) subcuentaToProd.set(String(p.subcuenta_puc).trim(), p);
+  });
 
-    let totalAbonado = 0;
-    for (const m of (batch || [])) {
-      totalAbonado += Number(m.debito) || 0;
-    }
-    totalAbonado = parseAndRoundCOP(totalAbonado, 2);
+  // Filtrar abonos contables válidos (excluir anulados/reversiones)
+  const abonosValidos = (movsTodos || []).filter((m) => {
+    const estado = String(m.estado || "activo").toLowerCase().trim();
+    if (estado === "inactivo" || estado === "anulado" || estado === "reversado") return false;
+    if (m.es_anulacion || m.es_reversion) return false;
 
-    const saldoPagar = parseAndRoundCOP(ext.saldo_a_pagar, 2);
-    let saldoPendiente = parseAndRoundCOP(saldoPagar - totalAbonado, 2);
-    if (Math.abs(saldoPendiente) < 0.01) saldoPendiente = 0;
-    const sinDeuda = saldoPagar === 0;
-    let porcentajePagado = saldoPagar > 0 ? parseAndRoundCOP((totalAbonado / saldoPagar) * 100, 2) : (sinDeuda ? 100 : 0);
-    if (porcentajePagado > 100 && Math.abs(saldoPendiente) < 0.01) porcentajePagado = 100;
-    const saldoAFavor = saldoPendiente < 0 ? parseAndRoundCOP(Math.abs(saldoPendiente), 2) : 0;
-    const nuevoEstado = (sinDeuda || (saldoPagar > 0 && saldoPendiente <= 0)) ? "pagado" : ext.estado;
+    const esAbonoTipo = String(m.tipo_movimiento_tdc || "").toLowerCase().trim() === "abono";
+    const esDebitoTDC = Number(m.debito) > 0 && (
+      (m.producto_credito_id && prodMap.has(m.producto_credito_id)) ||
+      (m.subcuenta && subcuentaToProd.has(String(m.subcuenta).trim()))
+    );
 
-    const updateData = {
-      total_abonado: totalAbonado,
-      saldo_pendiente: saldoPendiente,
-      porcentaje_pagado: porcentajePagado,
-      saldo_a_favor: saldoAFavor
-    };
-    if (nuevoEstado === "pagado" && ext.estado !== "pagado") {
-      updateData.estado = "pagado";
-      updateData.pagado_automaticamente = true;
-      updateData.fecha_pago_efectivo = today;
-    }
-    await entities.ExtractoProducto.update(ext.id, updateData);
-    resultados.push({
-      extracto_id: ext.id,
-      producto_id: ext.producto_id,
-      total_abonado: totalAbonado,
-      saldo_pendiente: saldoPendiente,
-      porcentaje_pagado: porcentajePagado
+    return esAbonoTipo || esDebitoTDC;
+  });
+
+  // Agrupar extractos por producto para calcular ventanas de facturación cronológicas
+  const extsByProd = new Map();
+  (extractosTodos || []).forEach((e) => {
+    if (!extsByProd.has(e.producto_id)) extsByProd.set(e.producto_id, []);
+    extsByProd.get(e.producto_id).push(e);
+  });
+
+  const updatesToRun = [];
+
+  for (const [pId, pExts] of extsByProd.entries()) {
+    // Si se especificó un producto_id o producto_ids de filtro, saltar los no solicitados
+    if (producto_id && pId !== producto_id) continue;
+    if (producto_ids && producto_ids.length > 0 && !producto_ids.includes(pId)) continue;
+
+    const prod = prodMap.get(pId);
+
+    // Ordenar extractos cronológicamente por fecha de corte / período
+    pExts.sort((a, b) => {
+      const fa = a.fecha_corte || a.periodo || "";
+      const fb = b.fecha_corte || b.periodo || "";
+      return fa.localeCompare(fb);
+    });
+
+    // Abonos pertenecientes a este producto
+    const pAbonos = abonosValidos.filter((a) => {
+      if (a.producto_credito_id === pId) return true;
+      if (prod?.subcuenta_puc && String(a.subcuenta).trim() === String(prod.subcuenta_puc).trim()) return true;
+      return false;
+    });
+
+    pExts.forEach((ext, idx) => {
+      // Determinar la fecha de corte del extracto normalizada
+      let fechaCorteExt = normalizeDate(ext.fecha_corte);
+      const diaCorteProd = Math.floor(prod?.fecha_corte || 1);
+
+      if (!fechaCorteExt && ext.periodo) {
+        fechaCorteExt = `${ext.periodo}-${String(diaCorteProd).padStart(2, "0")}`;
+      }
+
+      // Ventana de pago: desde la fecha de corte del extracto hasta el próximo corte
+      const nextExt = pExts[idx + 1];
+      let fechaFinVentana;
+      if (nextExt && nextExt.fecha_corte) {
+        fechaFinVentana = normalizeDate(nextExt.fecha_corte);
+      } else {
+        fechaFinVentana = shiftMonthStr(fechaCorteExt, 1);
+      }
+
+      let totalAbonado = 0;
+      pAbonos.forEach((a) => {
+        const fAbono = normalizeDate(a.fecha);
+
+        // 1. Coincidencia explícita
+        const matchExplicit = (a.extracto_id && a.extracto_id === ext.id) ||
+                              (a.periodo_extracto && a.periodo_extracto === ext.periodo);
+
+        // 2. Coincidencia por ventana de facturación y pago
+        // Los pagos se realizan a partir de la fecha de corte y antes del siguiente corte
+        let matchFecha = false;
+        if (fAbono && fechaCorteExt) {
+          matchFecha = (fAbono >= fechaCorteExt && (!fechaFinVentana || fAbono < fechaFinVentana));
+        }
+
+        if (matchExplicit || matchFecha) {
+          totalAbonado += Number(a.debito) || 0;
+        }
+      });
+
+      totalAbonado = parseAndRoundCOP(totalAbonado, 2);
+      const saldoPagar = parseAndRoundCOP(ext.saldo_a_pagar, 2);
+      let saldoPendiente = parseAndRoundCOP(saldoPagar - totalAbonado, 2);
+      if (Math.abs(saldoPendiente) < 0.01) saldoPendiente = 0;
+      const sinDeuda = saldoPagar === 0;
+      let porcentajePagado = saldoPagar > 0 ? parseAndRoundCOP((totalAbonado / saldoPagar) * 100, 2) : (sinDeuda ? 100 : 0);
+      if (porcentajePagado > 100 && Math.abs(saldoPendiente) < 0.01) porcentajePagado = 100;
+      const saldoAFavor = saldoPendiente < 0 ? parseAndRoundCOP(Math.abs(saldoPendiente), 2) : 0;
+      const nuevoEstado = (sinDeuda || (saldoPagar > 0 && saldoPendiente <= 0)) ? "pagado" : ext.estado;
+
+      const cambioValores =
+        Number(ext.total_abonado) !== totalAbonado ||
+        Number(ext.saldo_pendiente) !== saldoPendiente ||
+        Number(ext.porcentaje_pagado) !== porcentajePagado ||
+        Number(ext.saldo_a_favor || 0) !== saldoAFavor ||
+        ext.estado !== nuevoEstado;
+
+      if (cambioValores) {
+        const updateData = {
+          total_abonado: totalAbonado,
+          saldo_pendiente: saldoPendiente,
+          porcentaje_pagado: porcentajePagado,
+          saldo_a_favor: saldoAFavor
+        };
+        if (nuevoEstado === "pagado" && ext.estado !== "pagado") {
+          updateData.estado = "pagado";
+          updateData.pagado_automaticamente = true;
+          updateData.fecha_pago_efectivo = today;
+        }
+        updatesToRun.push(entities.ExtractoProducto.update(ext.id, updateData));
+      }
+
+      resultados.push({
+        extracto_id: ext.id,
+        producto_id: ext.producto_id,
+        total_abonado: totalAbonado,
+        saldo_pendiente: saldoPendiente,
+        porcentaje_pagado: porcentajePagado,
+        estado: nuevoEstado
+      });
     });
   }
 
-  return { resultados, warnings };
+  // Ejecutar todas las actualizaciones necesarias en paralelo
+  if (updatesToRun.length > 0) {
+    await Promise.all(updatesToRun);
+  }
+
+  return { resultados, warnings, actualizados: updatesToRun.length };
 }
 
 export async function procesarCargaMasiva(entities, payload = {}) {
+  const t0 = Date.now();
   const { movimientos: rows = [] } = payload || {};
   if (!rows || rows.length === 0) {
     return {
@@ -1384,61 +1852,242 @@ export async function procesarCargaMasiva(entities, payload = {}) {
       total_comprobantes: 0,
       creados: 0,
       fallidos: 0,
+      total_movimientos: 0,
+      duracion_ms: 0,
       resultados: [],
       errores: []
     };
   }
 
+  // 1. Group rows by comprobante_numero
   const grupos = {};
   const ordenGrupos = [];
   for (const row of rows) {
     const num = String(row.comprobante_numero || '1');
-    if (!grupos[num]) { grupos[num] = []; ordenGrupos.push(num); }
+    if (!grupos[num]) {
+      grupos[num] = [];
+      ordenGrupos.push(num);
+    }
     grupos[num].push(row);
   }
 
+  // 2. Fetch catalogs once in parallel
+  const [pucList, prodsList, cdaList] = await Promise.all([
+    entities.Cuenta.list().catch(() => []),
+    entities.ProductoCredito.list().catch(() => []),
+    entities.CuentaAhorro.list().catch(() => [])
+  ]);
+
+  const pucMap = {};
+  (pucList || []).forEach((c) => { pucMap[String(c.codigo)] = c; });
+
+  const prodsMap = {};
+  const prodsByCode = {};
+  (prodsList || []).forEach((p) => {
+    prodsMap[p.id] = p;
+    if (p.codigo_interno) {
+      prodsByCode[String(p.codigo_interno).trim().toLowerCase()] = p;
+    }
+  });
+
+  const cdaMap = {};
+  (cdaList || []).forEach((c) => {
+    if (c.subcuenta_puc) {
+      cdaMap[String(c.subcuenta_puc)] = c.id;
+    }
+  });
+
+  // 3. Group by year to reserve all consecutives in a single pass
+  const groupsByYear = {};
+  const today = new Date().toISOString().split("T")[0];
+
+  for (const num of ordenGrupos) {
+    const groupRows = grupos[num];
+    const rawFecha = groupRows[0]?.fecha;
+    const cleanFecha = normalizeDate(rawFecha) || today;
+    const year = parseInt(cleanFecha.substring(0, 4), 10) || new Date().getFullYear();
+    if (!groupsByYear[year]) groupsByYear[year] = [];
+    groupsByYear[year].push({ num, cleanFecha, rows: groupRows });
+  }
+
+  const comprobanteNumerosMap = {}; // num -> "0001-2026"
+
+  for (const [yearStr, yearGroups] of Object.entries(groupsByYear)) {
+    const year = parseInt(yearStr, 10);
+    const consecs = await entities.Consecutivo.filter({ año: year, tipo: "comprobante" });
+    const consecRecord = consecs && consecs[0];
+    let nextNum = (Number(consecRecord?.ultimo_numero) || 0) + 1;
+
+    for (const g of yearGroups) {
+      comprobanteNumerosMap[g.num] = `${String(nextNum).padStart(4, "0")}-${year}`;
+      nextNum++;
+    }
+
+    const finalUltimo = nextNum - 1;
+    if (consecRecord) {
+      await entities.Consecutivo.update(consecRecord.id, { ultimo_numero: finalUltimo });
+    } else {
+      await entities.Consecutivo.create({
+        año: year,
+        tipo: "comprobante",
+        ultimo_numero: finalUltimo
+      });
+    }
+  }
+
+  // 4. Assemble Comprobantes, Movimientos, and Historicos in memory
+  const comprobantesToCreate = [];
+  const movimientosToCreate = [];
+  const historicosToCreate = [];
   const resultados = [];
   const errores = [];
 
   for (const num of ordenGrupos) {
     try {
       const groupRows = grupos[num];
-      const fecha = groupRows[0]?.fecha || new Date().toISOString().split('T')[0];
+      const rawFecha = groupRows[0]?.fecha;
+      const cleanFecha = normalizeDate(rawFecha) || today;
+      const periodoOp = cleanFecha.substring(0, 7);
       const descripcion = groupRows[0]?.descripcion || `Carga Masiva ${num}`;
-      const movs = groupRows.map(r => ({
-        subcuenta: String(r.subcuenta || ''),
-        debito: Number(r.debito) || 0,
-        credito: Number(r.credito) || 0,
-        descripcion: r.descripcion || descripcion,
-        tercero: r.tercero || '',
-        cliente_id: r.cliente_id || '',
-        producto_credito_id: r.producto_credito_id || '',
-        cuenta_ahorro_id: r.cuenta_ahorro_id || '',
-        tipo_movimiento_tdc: r.tipo_movimiento_tdc || null,
-        periodo_extracto: r.periodo_extracto || ''
-      }));
+      const numeroGenerado = comprobanteNumerosMap[num];
 
-      const res = await createComprobante(entities, {
-        fecha,
-        descripcion,
+      let debTotal = 0;
+      let credTotal = 0;
+      for (const r of groupRows) {
+        let d = Number(r.debito) || 0;
+        let c = Number(r.credito) || 0;
+        if (d < 0) { c += Math.abs(d); d = 0; }
+        if (c < 0) { d += Math.abs(c); c = 0; }
+        debTotal += d;
+        credTotal += c;
+      }
+
+      const compId = `comp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}_${num}`;
+
+      comprobantesToCreate.push({
+        id: compId,
+        numero: numeroGenerado,
+        fecha: cleanFecha,
         tipo: 'diario',
-        movimientos: movs
+        descripcion,
+        estado: 'contabilizado',
+        total_debito: debTotal,
+        total_credito: credTotal
       });
+
+      for (let i = 0; i < groupRows.length; i++) {
+        const r = groupRows[i];
+        let d = Number(r.debito) || 0;
+        let c = Number(r.credito) || 0;
+        if (d < 0) { c += Math.abs(d); d = 0; }
+        if (c < 0) { d += Math.abs(c); c = 0; }
+
+        const subcuentaStr = String(r.subcuenta || '').trim();
+        const cuentaPuc = pucMap[subcuentaStr] || {};
+
+        // Resolve product ID from col_9 or codigo_producto if not provided
+        let prodId = r.producto_credito_id || '';
+        const prodCode = String(r.col_9 || r.codigo_producto || '').trim().toLowerCase();
+        if (!prodId && prodCode && prodsByCode[prodCode]) {
+          prodId = prodsByCode[prodCode].id;
+        }
+
+        // Resolve CDA id from subcuenta if not provided
+        let cdaId = r.cuenta_ahorro_id || '';
+        if (!cdaId && cdaMap[subcuentaStr]) {
+          cdaId = cdaMap[subcuentaStr];
+        }
+
+        // Resolve TDC movement type
+        let tipoTdc = r.tipo_movimiento_tdc ? String(r.tipo_movimiento_tdc).trim().toLowerCase() : null;
+        if (!tipoTdc && c > 0 && prodId && prodsMap[prodId]?.tipo === "TDC") {
+          tipoTdc = "compra";
+        }
+
+        movimientosToCreate.push({
+          id: `mov_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`,
+          comprobante_id: compId,
+          subcuenta: subcuentaStr,
+          cuenta_nombre: r.cuenta_nombre || cuentaPuc.concepto || '',
+          clase: r.clase || cuentaPuc.clase || (cuentaPuc.tipo_naturaleza || 'activo'),
+          grupo: r.grupo || String(cuentaPuc.grupo || ''),
+          cuenta: r.cuenta || String(cuentaPuc.cuenta || ''),
+          debito: d,
+          credito: c,
+          descripcion: r.descripcion || descripcion,
+          tercero: r.tercero || '',
+          cliente_id: r.cliente_id || '',
+          producto_credito_id: prodId,
+          cuenta_ahorro_id: cdaId,
+          tipo_movimiento_tdc: tipoTdc,
+          periodo_extracto: r.periodo_extracto || '',
+          periodo_operacion: periodoOp,
+          estado: 'activo',
+          fecha: cleanFecha
+        });
+      }
+
+      historicosToCreate.push({
+        id: `hist_${Date.now()}_${Math.random().toString(36).substring(2, 9)}_${num}`,
+        comprobante_id: compId,
+        numero_comprobante: numeroGenerado,
+        accion: 'creacion',
+        descripcion,
+        monto_total: debTotal,
+        usuario_email: 'multipagosstm@gmail.com',
+        fecha: cleanFecha
+      });
+
       resultados.push({
         comprobante_numero: num,
-        numero_generado: res.comprobante?.numero,
-        total: res.comprobante?.total_debito || 0,
-        movimientos: movs.length
+        numero_generado: numeroGenerado,
+        total: debTotal,
+        movimientos: groupRows.length
       });
     } catch (err) {
       errores.push({ comprobante_numero: num, error: err.message });
     }
   }
 
+  // 5. Batch insert in chunks for high throughput
+  const chunkArray = (arr, size) => {
+    const chunks = [];
+    for (let i = 0; i < arr.length; i += size) {
+      chunks.push(arr.slice(i, i + size));
+    }
+    return chunks;
+  };
+
+  // Insert Comprobantes (batches of 50)
+  for (const chunk of chunkArray(comprobantesToCreate, 50)) {
+    await entities.ComprobanteContable.bulkCreate(chunk);
+  }
+
+  // Insert Movimientos (batches of 100)
+  for (const chunk of chunkArray(movimientosToCreate, 100)) {
+    await entities.MovimientoContable.bulkCreate(chunk);
+  }
+
+  // Insert Historicos (batches of 50)
+  for (const chunk of chunkArray(historicosToCreate, 50)) {
+    await entities.HistoricoContable.bulkCreate(chunk);
+  }
+
+  // 6. Recalculate balances EXACTLY ONCE
+  try {
+    await recalcularSaldos(entities);
+  } catch (errRecalc) {
+    console.warn("Recálculo tras carga masiva:", errRecalc);
+  }
+
+  const duracionMs = Date.now() - t0;
+
   return {
     total_comprobantes: ordenGrupos.length,
     creados: resultados.length,
     fallidos: errores.length,
+    total_movimientos: movimientosToCreate.length,
+    duracion_ms: duracionMs,
     resultados,
     errores
   };

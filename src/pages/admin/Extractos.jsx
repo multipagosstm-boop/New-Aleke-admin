@@ -3,9 +3,10 @@ import { base44 } from "@/api/base44Client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Clock, DollarSign, CheckCircle2, Printer, FileText, FileUp, ChevronLeft, ChevronRight, Search, CalendarClock, ArrowUp, ArrowDown, ArrowUpDown, Download } from "lucide-react";
+import { Clock, DollarSign, CheckCircle2, Printer, FileText, FileUp, ChevronLeft, ChevronRight, Search, CalendarClock, ArrowUp, ArrowDown, ArrowUpDown, Download, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 const fmtDateShort = (d) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 
@@ -80,23 +81,41 @@ export default function Extractos() {
     return { cutoff, deadline, estado };
   };
 
-  const loadData = useCallback(async () => {
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadData = useCallback(async (sincronizar = true) => {
     try {
-      // Recalcular estado de extractos pendientes primero
-      await base44.functions.invoke("calcularEstadoExtractos", {}).catch(() => {});
+      // 1. Carga inicial en paralelo para renderizado instantáneo
       const [exts, prods, clients] = await Promise.all([
-        base44.entities.ExtractoProducto.list("-fecha_pago"),
+        base44.entities.ExtractoProducto.list("-fecha_pago", 2000),
         base44.entities.ProductoCredito.list(),
         base44.entities.Cliente.list()
       ]);
-      setExtractos(exts);
-      setProductos(prods);
-      setClientes(clients);
-    } catch (e) { console.error(e); }
-    setLoading(false);
+      setExtractos(exts || []);
+      setProductos(prods || []);
+      setClientes(clients || []);
+      setLoading(false);
+
+      // 2. Sincronizar abonos con el Libro Diario
+      if (sincronizar) {
+        setRefreshing(true);
+        const res = await base44.functions.invoke("calcularEstadoExtractos", {}).catch(() => null);
+        if (res?.data?.actualizados > 0) {
+          const freshExts = await base44.entities.ExtractoProducto.list("-fecha_pago", 2000);
+          setExtractos(freshExts || []);
+        }
+      }
+    } catch (e) {
+      console.error("Error al cargar extractos:", e);
+      setLoading(false);
+    } finally {
+      setRefreshing(false);
+    }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData(true);
+  }, [loadData]);
 
   const productoMap = {};
   productos.forEach((p) => { productoMap[p.id] = p; });
@@ -309,9 +328,22 @@ export default function Extractos() {
             <FileText className="w-4 h-4 mr-1" /> Gastos Financieros
           </Button>
         </div>
-        <Button onClick={() => setPdfModal(true)}>
-          <FileUp className="w-4 h-4 mr-2" /> Cargar Extracto PDF
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => loadData(true)}
+            disabled={refreshing}
+            className="text-xs h-9 gap-1.5"
+            title="Recalcular abonos desde movimientos del Libro Diario"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", refreshing && "animate-spin text-primary")} />
+            <span>{refreshing ? "Sincronizando..." : "Sincronizar abonos"}</span>
+          </Button>
+          <Button onClick={() => setPdfModal(true)} size="sm" className="h-9">
+            <FileUp className="w-4 h-4 mr-2" /> Cargar Extracto PDF
+          </Button>
+        </div>
       </div>
 
       {(tab === "pendiente_registro" || tab === "pendiente_pago" || tab === "pagado") && (
