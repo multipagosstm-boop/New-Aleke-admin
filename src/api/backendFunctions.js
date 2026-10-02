@@ -2099,11 +2099,18 @@ export async function conciliarExtracto(entities, payload = {}) {
 
   if (action === "iniciarConciliacion") {
     const ext = (await entities.ExtractoProducto.get(extractoId)) || { id: extractoId };
+    const prod = ext.producto_id ? await entities.ProductoCredito.get(ext.producto_id).catch(() => null) : null;
     const lineasBanco = (await entities.LineaExtracto.filter({ extracto_id: extractoId })) || [];
-    const movs = (await entities.MovimientoContable.filter({
-      producto_credito_id: ext.producto_id,
-      estado: "activo"
-    })) || [];
+    
+    const movsTodos = (await entities.MovimientoContable.list("-fecha", 15000)) || [];
+    const movs = movsTodos.filter(m => {
+      const estado = String(m.estado || "activo").toLowerCase().trim();
+      if (estado === "inactivo" || estado === "anulado" || estado === "reversado") return false;
+      const matchProd = (ext.producto_id && m.producto_credito_id === ext.producto_id) ||
+                        (prod?.subcuenta_puc && String(m.subcuenta).trim() === String(prod.subcuenta_puc).trim());
+      return matchProd;
+    });
+
     const sumaCreditos = movs.reduce((s, m) => s + (Number(m.credito) || 0), 0);
     const sumaDebitos = movs.reduce((s, m) => s + (Number(m.debito) || 0), 0);
     const saldoSistema = parseAndRoundCOP(sumaCreditos - sumaDebitos, 2);
@@ -2125,26 +2132,46 @@ export async function conciliarExtracto(entities, payload = {}) {
   }
 
   if (action === "compararMovimientos") {
-    const lineasBanco = (await entities.LineaExtracto.filter({ extracto_id: extractoId })) || [];
     const ext = (await entities.ExtractoProducto.get(extractoId)) || { id: extractoId };
-    const movs = (await entities.MovimientoContable.filter({
-      producto_credito_id: ext.producto_id,
-      estado: "activo"
-    })) || [];
+    const prod = ext.producto_id ? await entities.ProductoCredito.get(ext.producto_id).catch(() => null) : null;
+    const lineasBanco = (await entities.LineaExtracto.filter({ extracto_id: extractoId })) || [];
+    
+    const movsTodos = (await entities.MovimientoContable.list("-fecha", 15000)) || [];
+    const movs = movsTodos.filter(m => {
+      const estado = String(m.estado || "activo").toLowerCase().trim();
+      if (estado === "inactivo" || estado === "anulado" || estado === "reversado") return false;
+      const matchProd = (ext.producto_id && m.producto_credito_id === ext.producto_id) ||
+                        (prod?.subcuenta_puc && String(m.subcuenta).trim() === String(prod.subcuenta_puc).trim());
+      return matchProd;
+    });
 
     const conciliados = [];
     const faltantes = [];
-    const sobrantes = [...movs];
+    const sobrantesPool = [...movs];
 
     for (const lb of lineasBanco) {
-      const matchIdx = sobrantes.findIndex(m => Math.abs((Number(m.debito || m.credito) || 0) - Number(lb.valor)) < 1.0);
+      const valLinea = Number(lb.valor) || 0;
+      const matchIdx = sobrantesPool.findIndex(m => {
+        const valMov = Number(m.debito > 0 ? m.debito : m.credito) || 0;
+        return Math.abs(valMov - valLinea) < 1.0;
+      });
+
       if (matchIdx !== -1) {
-        conciliados.push({ linea_banco: lb, movimiento_sistema: sobrantes[matchIdx] });
-        sobrantes.splice(matchIdx, 1);
+        conciliados.push({
+          linea_banco: lb,
+          movimiento_sistema: sobrantesPool[matchIdx]
+        });
+        sobrantesPool.splice(matchIdx, 1);
       } else {
-        faltantes.push(lb);
+        faltantes.push({
+          linea_banco: lb
+        });
       }
     }
+
+    const sobrantes = sobrantesPool.map(m => ({
+      movimiento_sistema: m
+    }));
 
     return {
       conciliados,

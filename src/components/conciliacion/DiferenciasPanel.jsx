@@ -62,14 +62,17 @@ export default function DiferenciasPanel({ comparacion, cdas, onCrearFaltante, o
             <summary className="px-3 py-1.5 cursor-pointer text-xs text-muted-foreground">Ver detalle</summary>
             <table className="w-full text-xs">
               <tbody>
-                {conciliados.map((c, i) => (
-                  <tr key={i} className="border-t border-border/40">
-                    <td className="px-3 py-1.5">{formatDate(c.linea_banco.fecha)}</td>
-                    <td className="px-3 py-1.5">{c.linea_banco.descripcion}</td>
-                    <td className="px-3 py-1.5 text-right font-mono">{formatCOP(c.linea_banco.valor)}</td>
-                    <td className="px-3 py-1.5"><Badge className="bg-success/15 text-success text-[10px]">✓</Badge></td>
-                  </tr>
-                ))}
+                {conciliados.map((c, i) => {
+                  const lb = c?.linea_banco || c;
+                  return (
+                    <tr key={i} className="border-t border-border/40">
+                      <td className="px-3 py-1.5">{formatDate(lb?.fecha)}</td>
+                      <td className="px-3 py-1.5">{lb?.descripcion}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{formatCOP(lb?.valor)}</td>
+                      <td className="px-3 py-1.5"><Badge className="bg-success/15 text-success text-[10px]">✓</Badge></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </details>
@@ -80,34 +83,37 @@ export default function DiferenciasPanel({ comparacion, cdas, onCrearFaltante, o
         <div>
           <h3 className="text-sm font-semibold mb-1"><XCircle className="w-4 h-4 inline mr-1 text-destructive" /> Faltantes en sistema ({faltantes.length})</h3>
           <div className="space-y-1.5">
-            {faltantes.map((f) => (
-              <div key={f.linea_banco.id} className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
-                <div className="flex items-start justify-between">
-                  <div className="text-sm">
-                    <div><span className="font-medium">❌ {formatDate(f.linea_banco.fecha)}</span> · {f.linea_banco.tipo} · {formatCOP(f.linea_banco.valor)}</div>
-                    <div className="text-xs text-muted-foreground">{f.linea_banco.descripcion}</div>
-                    <div className="text-xs text-destructive">Aparece en extracto banco — No está en el sistema</div>
-                  </div>
-                  <div className="flex gap-1">
-                    <Button size="sm" disabled={bloqueado} onClick={() => {
-                      const l = f.linea_banco;
-                      let def = "";
-                      if (l.naturaleza === "cargo") {
-                        def = l.tipo === "financiero" ? (l.subcuenta_gasto || "510502") : "510502";
-                      } else {
-                        def = cdasActivas[0]?.subcuenta_puc || "139006";
-                      }
-                      setCrearModal({ open: true, linea: l });
-                      setContrapartida(def);
-                      setDescAdicional("");
-                    }}>
-                      <Plus className="w-3 h-3 mr-1" /> Crear en sistema
-                    </Button>
-                    <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onMarcarEnDisputa(f.linea_banco.id)}>En disputa</Button>
+            {faltantes.map((f, idx) => {
+              const l = f?.linea_banco || f;
+              if (!l) return null;
+              return (
+                <div key={l.id || idx} className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                  <div className="flex items-start justify-between">
+                    <div className="text-sm">
+                      <div><span className="font-medium">❌ {formatDate(l.fecha)}</span> · {l.tipo || "Gasto"} · {formatCOP(l.valor)}</div>
+                      <div className="text-xs text-muted-foreground">{l.descripcion}</div>
+                      <div className="text-xs text-destructive">Aparece en extracto banco — No está en el sistema</div>
+                    </div>
+                    <div className="flex gap-1">
+                      <Button size="sm" disabled={bloqueado} onClick={() => {
+                        let def = "";
+                        if (l.naturaleza === "cargo") {
+                          def = l.tipo === "financiero" ? (l.subcuenta_gasto || "510502") : "510502";
+                        } else {
+                          def = cdasActivas[0]?.subcuenta_puc || "139006";
+                        }
+                        setCrearModal({ open: true, linea: l });
+                        setContrapartida(def);
+                        setDescAdicional("");
+                      }}>
+                        <Plus className="w-3 h-3 mr-1" /> Crear en sistema
+                      </Button>
+                      <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onMarcarEnDisputa(l.id)}>En disputa</Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -116,23 +122,27 @@ export default function DiferenciasPanel({ comparacion, cdas, onCrearFaltante, o
         <div>
           <h3 className="text-sm font-semibold mb-1"><AlertTriangle className="w-4 h-4 inline mr-1 text-warning" /> Sobrantes en sistema ({sobrantes.length})</h3>
           <div className="space-y-1.5">
-            {sobrantes.map((s) => (
-              <div key={s.movimiento_sistema.id} className="rounded-md border border-warning/30 bg-warning/5 p-3">
-                <div className="flex items-start justify-between">
-                  <div className="text-sm">
-                    <div><span className="font-medium">⚠️ {formatDate(s.movimiento_sistema.fecha)}</span> · {formatCOP(s.movimiento_sistema.credito || s.movimiento_sistema.debito)}</div>
-                    <div className="text-xs text-muted-foreground">{s.movimiento_sistema.descripcion}</div>
-                    <div className="text-xs text-warning">Está en el sistema — No aparece en extracto banco</div>
-                  </div>
-                  <div className="flex gap-1 flex-wrap">
-                    <Button size="sm" variant="secondary" disabled={bloqueado} onClick={() => setModificarModal({ open: true, movimiento: s.movimiento_sistema })}>Modificar</Button>
-                    <Button size="sm" variant="destructive" disabled={bloqueado} onClick={() => onMarcarSobrante(s.movimiento_sistema.id, "anular")}>Anular</Button>
-                    <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onMarcarSobrante(s.movimiento_sistema.id, "marcar_en_disputa")}>En disputa</Button>
-                    <Button size="sm" variant="ghost" disabled={bloqueado} onClick={() => onMarcarSobrante(s.movimiento_sistema.id, "ignorar")}>Ignorar</Button>
+            {sobrantes.map((s, idx) => {
+              const ms = s?.movimiento_sistema || s;
+              if (!ms) return null;
+              return (
+                <div key={ms.id || idx} className="rounded-md border border-warning/30 bg-warning/5 p-3">
+                  <div className="flex items-start justify-between">
+                    <div className="text-sm">
+                      <div><span className="font-medium">⚠️ {formatDate(ms.fecha)}</span> · {formatCOP(ms.credito || ms.debito || 0)}</div>
+                      <div className="text-xs text-muted-foreground">{ms.descripcion}</div>
+                      <div className="text-xs text-warning">Está en el sistema — No aparece en extracto banco</div>
+                    </div>
+                    <div className="flex gap-1 flex-wrap">
+                      <Button size="sm" variant="secondary" disabled={bloqueado} onClick={() => setModificarModal({ open: true, movimiento: ms })}>Modificar</Button>
+                      <Button size="sm" variant="destructive" disabled={bloqueado} onClick={() => onMarcarSobrante(ms.id, "anular")}>Anular</Button>
+                      <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onMarcarSobrante(ms.id, "marcar_en_disputa")}>En disputa</Button>
+                      <Button size="sm" variant="ghost" disabled={bloqueado} onClick={() => onMarcarSobrante(ms.id, "ignorar")}>Ignorar</Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -141,24 +151,28 @@ export default function DiferenciasPanel({ comparacion, cdas, onCrearFaltante, o
         <div>
           <h3 className="text-sm font-semibold mb-1"><AlertTriangle className="w-4 h-4 inline mr-1 text-warning" /> Con diferencias de valor ({diferencias.length})</h3>
           <div className="space-y-1.5">
-            {diferencias.map((d, i) => (
-              <div key={i} className="rounded-md border border-warning/30 bg-warning/5 p-3">
-                <div className="flex items-start justify-between">
-                  <div className="text-sm">
-                    <div><span className="font-medium">💛 {formatDate(d.linea_banco.fecha)}</span> · {d.linea_banco.descripcion}</div>
-                    <div className="text-xs space-x-3 mt-1">
-                      <span>Banco: <span className="font-mono">{formatCOP(d.valor_banco)}</span></span>
-                      <span>Sistema: <span className="font-mono">{formatCOP(d.valor_sistema)}</span></span>
-                      <span className={d.diferencia > 0 ? "text-destructive" : "text-success"}>Dif: <span className="font-mono">{formatCOP(d.diferencia)}</span></span>
+            {diferencias.map((d, i) => {
+              const lb = d?.linea_banco || {};
+              const ms = d?.movimiento_sistema || {};
+              return (
+                <div key={i} className="rounded-md border border-warning/30 bg-warning/5 p-3">
+                  <div className="flex items-start justify-between">
+                    <div className="text-sm">
+                      <div><span className="font-medium">💛 {formatDate(lb.fecha)}</span> · {lb.descripcion}</div>
+                      <div className="text-xs space-x-3 mt-1">
+                        <span>Banco: <span className="font-mono">{formatCOP(d.valor_banco || lb.valor || 0)}</span></span>
+                        <span>Sistema: <span className="font-mono">{formatCOP(d.valor_sistema || ms.credito || ms.debito || 0)}</span></span>
+                        <span className={d.diferencia > 0 ? "text-destructive" : "text-success"}>Dif: <span className="font-mono">{formatCOP(d.diferencia)}</span></span>
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onAjustarDiferente(lb.id, ms.id, "anular_y_recrear")}>Anular y recrear</Button>
+                      <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onAjustarDiferente(lb.id, ms.id, "crear_diferencia")}>Crear ajuste ${formatCOP(Math.abs(d.diferencia))}</Button>
                     </div>
                   </div>
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onAjustarDiferente(d.linea_banco.id, d.movimiento_sistema.id, "anular_y_recrear")}>Anular y recrear</Button>
-                    <Button size="sm" variant="outline" disabled={bloqueado} onClick={() => onAjustarDiferente(d.linea_banco.id, d.movimiento_sistema.id, "crear_diferencia")}>Crear ajuste ${formatCOP(Math.abs(d.diferencia))}</Button>
-                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

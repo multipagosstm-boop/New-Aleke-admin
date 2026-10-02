@@ -285,8 +285,12 @@ export default function Conciliacion() {
 
   const matchMap = useMemo(() => {
     const map = {};
-    if (comparacion) {
-      comparacion.conciliados.forEach((c) => { map[c.linea_banco.id] = c.movimiento_sistema.id; });
+    if (comparacion?.conciliados) {
+      comparacion.conciliados.forEach((c) => {
+        const lbId = c?.linea_banco?.id || c?.linea_banco_id || c?.id;
+        const msId = c?.movimiento_sistema?.id || c?.movimiento_sistema_id;
+        if (lbId && msId) map[lbId] = msId;
+      });
     }
     return map;
   }, [comparacion]);
