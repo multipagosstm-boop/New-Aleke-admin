@@ -1,8 +1,9 @@
-// Inspired by react-hot-toast library
+// Inspired by react-hot-toast and shadcn/ui
 import { useState, useEffect } from "react";
 
-const TOAST_LIMIT = 20;
-const TOAST_REMOVE_DELAY = 1000000;
+const TOAST_LIMIT = 3;
+const TOAST_AUTO_DISMISS_DELAY = 5000; // 5 segundos de superposición antes de desaparecer automáticamente
+const TOAST_REMOVE_DELAY = 600; // Tiempo para permitir la animación de salida antes de eliminar del estado
 
 const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
@@ -18,30 +19,23 @@ function genId() {
   return count.toString();
 }
 
-const toastTimeouts = new Map();
+const toastAutoDismissTimeouts = new Map();
+const toastRemoveTimeouts = new Map();
 
 const addToRemoveQueue = (toastId) => {
-  if (toastTimeouts.has(toastId)) {
+  if (toastRemoveTimeouts.has(toastId)) {
     return;
   }
 
   const timeout = setTimeout(() => {
-    toastTimeouts.delete(toastId);
+    toastRemoveTimeouts.delete(toastId);
     dispatch({
       type: actionTypes.REMOVE_TOAST,
       toastId,
     });
   }, TOAST_REMOVE_DELAY);
 
-  toastTimeouts.set(toastId, timeout);
-};
-
-const _clearFromRemoveQueue = (toastId) => {
-  const timeout = toastTimeouts.get(toastId);
-  if (timeout) {
-    clearTimeout(timeout);
-    toastTimeouts.delete(toastId);
-  }
+  toastRemoveTimeouts.set(toastId, timeout);
 };
 
 export const reducer = (state, action) => {
@@ -63,12 +57,18 @@ export const reducer = (state, action) => {
     case actionTypes.DISMISS_TOAST: {
       const { toastId } = action;
 
-      // ! Side effects ! - This could be extracted into a dismissToast() action,
-      // but I'll keep it here for simplicity
       if (toastId) {
+        if (toastAutoDismissTimeouts.has(toastId)) {
+          clearTimeout(toastAutoDismissTimeouts.get(toastId));
+          toastAutoDismissTimeouts.delete(toastId);
+        }
         addToRemoveQueue(toastId);
       } else {
         state.toasts.forEach((toast) => {
+          if (toastAutoDismissTimeouts.has(toast.id)) {
+            clearTimeout(toastAutoDismissTimeouts.get(toast.id));
+            toastAutoDismissTimeouts.delete(toast.id);
+          }
           addToRemoveQueue(toast.id);
         });
       }
@@ -96,6 +96,8 @@ export const reducer = (state, action) => {
         ...state,
         toasts: state.toasts.filter((t) => t.id !== action.toastId),
       };
+    default:
+      return state;
   }
 };
 
@@ -113,14 +115,27 @@ function dispatch(action) {
 function toast({ ...props }) {
   const id = genId();
 
-  const update = (props) =>
+  const update = (newProps) =>
     dispatch({
       type: actionTypes.UPDATE_TOAST,
-      toast: { ...props, id },
+      toast: { ...newProps, id },
     });
 
-  const dismiss = () =>
+  const dismiss = () => {
+    if (toastAutoDismissTimeouts.has(id)) {
+      clearTimeout(toastAutoDismissTimeouts.get(id));
+      toastAutoDismissTimeouts.delete(id);
+    }
     dispatch({ type: actionTypes.DISMISS_TOAST, toastId: id });
+  };
+
+  const duration = props.duration !== undefined ? props.duration : TOAST_AUTO_DISMISS_DELAY;
+  if (duration > 0 && duration !== Infinity) {
+    const timer = setTimeout(() => {
+      dismiss();
+    }, duration);
+    toastAutoDismissTimeouts.set(id, timer);
+  }
 
   dispatch({
     type: actionTypes.ADD_TOAST,
@@ -128,6 +143,7 @@ function toast({ ...props }) {
       ...props,
       id,
       open: true,
+      duration,
       onOpenChange: (open) => {
         if (!open) dismiss();
       },
@@ -157,8 +173,14 @@ function useToast() {
   return {
     ...state,
     toast,
-    dismiss: (toastId) => dispatch({ type: actionTypes.DISMISS_TOAST, toastId }),
+    dismiss: (toastId) => {
+      if (toastId && toastAutoDismissTimeouts.has(toastId)) {
+        clearTimeout(toastAutoDismissTimeouts.get(toastId));
+        toastAutoDismissTimeouts.delete(toastId);
+      }
+      dispatch({ type: actionTypes.DISMISS_TOAST, toastId });
+    },
   };
 }
 
-export { useToast, toast }; 
+export { useToast, toast };

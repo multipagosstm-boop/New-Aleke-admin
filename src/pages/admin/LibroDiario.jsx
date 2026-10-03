@@ -90,8 +90,8 @@ export default function LibroDiario() {
   const loadData = useCallback(async () => {
     try {
       const [comps, movs, clients, cdas, prods, puc, me] = await Promise.all([
-        base44.entities.ComprobanteContable.list("-fecha", 5000),
-        base44.entities.MovimientoContable.list("-fecha", 2000),
+        base44.entities.ComprobanteContable.list("-fecha", 10000),
+        base44.entities.MovimientoContable.list("-fecha", 35000),
         base44.entities.Cliente.list(),
         base44.entities.CuentaAhorro.list(),
         base44.entities.ProductoCredito.list(),
@@ -125,6 +125,24 @@ export default function LibroDiario() {
       }
     }
   }, [searchParams, loading, comprobantes]);
+
+  const prodMap = useMemo(() => {
+    const map = {};
+    (productosCredito || []).forEach((p) => {
+      map[p.id] = p;
+      if (p.subcuenta_puc) map[String(p.subcuenta_puc).trim()] = p;
+    });
+    return map;
+  }, [productosCredito]);
+
+  const cdaMap = useMemo(() => {
+    const map = {};
+    (cuentasAhorro || []).forEach((c) => {
+      map[c.id] = c;
+      if (c.subcuenta_puc) map[String(c.subcuenta_puc).trim()] = c;
+    });
+    return map;
+  }, [cuentasAhorro]);
 
   const movsByComprobante = useMemo(() => {
     const map = {};
@@ -189,6 +207,16 @@ export default function LibroDiario() {
     await loadData();
   };
 
+  const matchFuzzy = (target, query) => {
+    if (!target || !query) return false;
+    const t = String(target).toLowerCase();
+    const q = String(query).toLowerCase().trim();
+    if (t.includes(q)) return true;
+    const cleanT = t.replace(/[\s\-_./]/g, "");
+    const cleanQ = q.replace(/[\s\-_./]/g, "");
+    return cleanQ.length > 0 && cleanT.includes(cleanQ);
+  };
+
   const filtered = comprobantes.filter((c) => {
     if (filtroTipo !== "all" && c.tipo !== filtroTipo) return false;
     if (filtroEstado !== "all" && c.estado !== filtroEstado) return false;
@@ -197,8 +225,17 @@ export default function LibroDiario() {
       if (!movs.some((m) => m.subcuenta === subcuentaFilter)) return false;
     }
     if (filtroCuenta) {
-      const q = filtroCuenta.toLowerCase();
-      if (!movs.some((m) => (m.subcuenta || "").toLowerCase().includes(q) || (m.cuenta_nombre || "").toLowerCase().includes(q))) return false;
+      if (!movs.some((m) => {
+        const prod = (m.producto_credito_id && prodMap[m.producto_credito_id]) || (m.subcuenta && prodMap[String(m.subcuenta).trim()]);
+        return (
+          matchFuzzy(m.subcuenta, filtroCuenta) ||
+          matchFuzzy(m.cuenta_nombre, filtroCuenta) ||
+          matchFuzzy(prod?.nombre, filtroCuenta) ||
+          matchFuzzy(prod?.codigo_interno, filtroCuenta) ||
+          matchFuzzy(prod?.nomenclatura, filtroCuenta) ||
+          matchFuzzy(prod?.subcuenta_puc, filtroCuenta)
+        );
+      })) return false;
     }
     if (filtroFecha) {
       if (c.fecha !== filtroFecha) return false;
@@ -208,14 +245,26 @@ export default function LibroDiario() {
       if (!isNaN(v) && !movs.some((m) => Math.abs((m.debito || 0) - v) < 0.01 || Math.abs((m.credito || 0) - v) < 0.01)) return false;
     }
     if (busqueda) {
-      const q = busqueda.toLowerCase();
-      const matchComp = c.numero.toLowerCase().includes(q) || (c.descripcion || "").toLowerCase().includes(q);
-      const matchMov = movs.some((m) =>
-        (m.subcuenta || "").toLowerCase().includes(q) ||
-        (m.cuenta_nombre || "").toLowerCase().includes(q) ||
-        (m.descripcion || "").toLowerCase().includes(q) ||
-        (m.tercero || "").toLowerCase().includes(q)
-      );
+      const matchComp = matchFuzzy(c.numero, busqueda) || matchFuzzy(c.descripcion, busqueda);
+      const matchMov = movs.some((m) => {
+        const prod = (m.producto_credito_id && prodMap[m.producto_credito_id]) || (m.subcuenta && prodMap[String(m.subcuenta).trim()]);
+        const cda = (m.cuenta_ahorro_id && cdaMap[m.cuenta_ahorro_id]) || (m.subcuenta && cdaMap[String(m.subcuenta).trim()]);
+        return (
+          matchFuzzy(m.subcuenta, busqueda) ||
+          matchFuzzy(m.cuenta_nombre, busqueda) ||
+          matchFuzzy(m.descripcion, busqueda) ||
+          matchFuzzy(m.tercero, busqueda) ||
+          matchFuzzy(prod?.nombre, busqueda) ||
+          matchFuzzy(prod?.numero_completo, busqueda) ||
+          matchFuzzy(prod?.numero_tarjeta, busqueda) ||
+          matchFuzzy(prod?.nomenclatura, busqueda) ||
+          matchFuzzy(prod?.codigo_interno, busqueda) ||
+          matchFuzzy(prod?.subcuenta_puc, busqueda) ||
+          matchFuzzy(cda?.banco, busqueda) ||
+          matchFuzzy(cda?.numero_cuenta, busqueda) ||
+          matchFuzzy(cda?.nombre, busqueda)
+        );
+      });
       if (!matchComp && !matchMov) return false;
     }
     return true;
@@ -708,21 +757,36 @@ export default function LibroDiario() {
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {movs.map((m) => (
-                                      <tr key={m.id} className="border-b border-border/30 hover:bg-muted/40">
-                                        <td className="py-1.5 px-2 font-mono font-medium">{m.subcuenta}</td>
-                                        <td className="py-1.5 px-2">{m.cuenta_nombre} {m.descripcion && <span className="text-muted-foreground">— {m.descripcion}</span>}</td>
-                                        <td className="py-1.5 px-2 text-muted-foreground">{m.tercero || "—"}</td>
-                                        <td className="py-1.5 px-2 text-right font-mono">{m.debito ? formatCOP(m.debito) : ""}</td>
-                                        <td className="py-1.5 px-2 text-right font-mono">{m.credito ? formatCOP(m.credito) : ""}</td>
-                                        <td className="py-1.5 px-2 font-mono text-xs">{m.periodo_extracto || <span className="text-muted-foreground">—</span>}</td>
-                                        <td className="py-1.5 px-2 text-right">
-                                          <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setEditarPeriodoMov(m)}>
-                                            <Edit className="w-3 h-3 mr-1" /> Período
-                                          </Button>
-                                        </td>
-                                      </tr>
-                                    ))}
+                                    {movs.map((m) => {
+                                      const prod = (m.producto_credito_id && prodMap[m.producto_credito_id]) || (m.subcuenta && prodMap[String(m.subcuenta).trim()]);
+                                      const cda = (m.cuenta_ahorro_id && cdaMap[m.cuenta_ahorro_id]) || (m.subcuenta && cdaMap[String(m.subcuenta).trim()]);
+                                      const nombreMostrar = m.cuenta_nombre || prod?.nombre || cda?.nombre || "";
+                                      return (
+                                        <tr key={m.id} className="border-b border-border/30 hover:bg-muted/40">
+                                          <td className="py-1.5 px-2 font-mono font-medium">{m.subcuenta}</td>
+                                          <td className="py-1.5 px-2">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className="font-medium">{nombreMostrar}</span>
+                                              {prod && (
+                                                <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-primary/40 text-primary">
+                                                  {prod.tipo || "TDC"} · {prod.nomenclatura || prod.codigo_interno || prod.nombre}
+                                                </Badge>
+                                              )}
+                                              {m.descripcion && <span className="text-muted-foreground">— {m.descripcion}</span>}
+                                            </div>
+                                          </td>
+                                          <td className="py-1.5 px-2 text-muted-foreground">{m.tercero || "—"}</td>
+                                          <td className="py-1.5 px-2 text-right font-mono">{m.debito ? formatCOP(m.debito) : ""}</td>
+                                          <td className="py-1.5 px-2 text-right font-mono">{m.credito ? formatCOP(m.credito) : ""}</td>
+                                          <td className="py-1.5 px-2 font-mono text-xs">{m.periodo_extracto || <span className="text-muted-foreground">—</span>}</td>
+                                          <td className="py-1.5 px-2 text-right">
+                                            <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setEditarPeriodoMov(m)}>
+                                              <Edit className="w-3 h-3 mr-1" /> Período
+                                            </Button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                                 {isAdmin && (

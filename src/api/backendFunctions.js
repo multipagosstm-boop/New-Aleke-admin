@@ -259,22 +259,44 @@ export async function createComprobante(entities, payload = {}) {
 
   const createdMovs = [];
   let pucList = [];
+  let prodsList = [];
+  let cdasList = [];
   try {
-    pucList = await entities.Cuenta.list();
+    [pucList, prodsList, cdasList] = await Promise.all([
+      entities.Cuenta.list(),
+      entities.ProductoCredito.list().catch(() => []),
+      entities.CuentaAhorro.list().catch(() => [])
+    ]);
   } catch {
     pucList = [];
   }
   const pucMap = {};
   (pucList || []).forEach((c) => { pucMap[String(c.codigo)] = c; });
+  const prodBySubcuenta = {};
+  (prodsList || []).forEach((p) => { if (p.subcuenta_puc) prodBySubcuenta[String(p.subcuenta_puc).trim()] = p; });
+  const cdaBySubcuenta = {};
+  (cdasList || []).forEach((c) => { if (c.subcuenta_puc) cdaBySubcuenta[String(c.subcuenta_puc).trim()] = c; });
 
   const periodoOp = cleanFecha.substring(0, 7);
 
   for (const m of movimientos) {
-    const cuentaPuc = pucMap[String(m.subcuenta)] || {};
+    const subStr = String(m.subcuenta || "").trim();
+    const cuentaPuc = pucMap[subStr] || {};
+    let prodId = m.producto_credito_id || null;
+    let cdaId = m.cuenta_ahorro_id || null;
+    if (!prodId && subStr && prodBySubcuenta[subStr]) {
+      prodId = prodBySubcuenta[subStr].id;
+    }
+    if (!cdaId && subStr && cdaBySubcuenta[subStr]) {
+      cdaId = cdaBySubcuenta[subStr].id;
+    }
+
     const mov = await entities.MovimientoContable.create({
       ...m,
       comprobante_id: comprobante.id,
-      cuenta_nombre: m.cuenta_nombre || cuentaPuc.concepto || "",
+      producto_credito_id: prodId,
+      cuenta_ahorro_id: cdaId,
+      cuenta_nombre: m.cuenta_nombre || prodBySubcuenta[subStr]?.nombre || cdaBySubcuenta[subStr]?.nombre || cuentaPuc.concepto || "",
       clase: m.clase || cuentaPuc.clase || (cuentaPuc.tipo_naturaleza || "activo"),
       grupo: m.grupo || String(cuentaPuc.grupo || ""),
       cuenta: m.cuenta || String(cuentaPuc.cuenta || ""),
@@ -396,11 +418,19 @@ export async function modificarComprobante(entities, payload = {}) {
 export async function anularComprobante(entities, payload = {}) {
   const { comprobante_id, motivo = "Anulación administrativa" } = payload;
   const comp = await entities.ComprobanteContable.get(comprobante_id);
-  if (!comp) return { success: false, error: "Comprobante no encontrado" };
+  if (!comp) {
+    const movs = await entities.MovimientoContable.filter({ comprobante_id });
+    for (const m of movs) {
+      await entities.MovimientoContable.update(m.id, { estado: "anulado" });
+    }
+    return { success: true, advertencia: "Comprobante no encontrado en cabecera; movimientos anulados." };
+  }
 
   await entities.ComprobanteContable.update(comprobante_id, {
     estado: "anulado",
-    motivo_anulacion: motivo
+    motivo_anulacion: motivo,
+    anulado_at: new Date().toISOString(),
+    anulado_por_email: "multipagosstm@gmail.com"
   });
 
   const movs = await entities.MovimientoContable.filter({ comprobante_id });
@@ -408,15 +438,19 @@ export async function anularComprobante(entities, payload = {}) {
     await entities.MovimientoContable.update(m.id, { estado: "anulado" });
   }
 
-  await entities.HistoricoContable.create({
-    comprobante_id,
-    numero_comprobante: comp.numero,
-    accion: "anulacion",
-    descripcion: motivo,
-    monto_total: comp.total_debito,
-    usuario_email: "multipagosstm@gmail.com",
-    fecha: new Date().toISOString().split('T')[0]
-  });
+  try {
+    await entities.HistoricoContable.create({
+      comprobante_id,
+      numero_comprobante: comp.numero,
+      accion: "anulacion",
+      descripcion: motivo,
+      monto_total: comp.total_debito,
+      usuario_email: "multipagosstm@gmail.com",
+      fecha: new Date().toISOString().split('T')[0]
+    });
+  } catch (errHist) {
+    console.warn("Error en HistoricoContable:", errHist);
+  }
 
   return { success: true };
 }
@@ -2093,41 +2127,197 @@ export async function procesarCargaMasiva(entities, payload = {}) {
   };
 }
 
+export async function determinarVentanaConciliacion(entities, ext, prod, lineasBanco = []) {
+  // 1. Fecha de corte actual (límite superior estricto)
+  let fechaFin = normalizeDate(ext?.fecha_corte);
+  const diaCorteProd = Math.floor(prod?.fecha_corte || 1);
+
+  if (!fechaFin && ext?.periodo) {
+    const parts = ext.periodo.split("-").map(Number);
+    const y = parts[0] || 2026;
+    const m = parts[1] || 1;
+    const maxDays = new Date(y, m, 0).getDate();
+    const d = Math.min(diaCorteProd, maxDays);
+    fechaFin = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+
+  // 2. Fecha de corte anterior (límite inferior)
+  let fechaInicio = normalizeDate(ext?.fecha_inicio || ext?.fecha_corte_anterior);
+
+  if (!fechaInicio && ext?.producto_id) {
+    try {
+      const extsProd = await entities.ExtractoProducto.filter({ producto_id: ext.producto_id });
+      const extsAnteriores = (extsProd || [])
+        .filter((e) => e.id !== ext.id && (e.fecha_corte || e.periodo))
+        .sort((a, b) => {
+          const fa = a.fecha_corte || a.periodo || "";
+          const fb = b.fecha_corte || b.periodo || "";
+          return fb.localeCompare(fa);
+        });
+
+      const prev = extsAnteriores.find((e) => {
+        const f = normalizeDate(e.fecha_corte);
+        return f && fechaFin && f < fechaFin;
+      });
+
+      if (prev?.fecha_corte) {
+        fechaInicio = normalizeDate(prev.fecha_corte);
+      }
+    } catch {
+      // Ignorar fallback
+    }
+  }
+
+  // Si no hay fechaInicio previa, desplazar exactamente 1 mes hacia atrás desde fechaFin
+  if (!fechaInicio && fechaFin) {
+    const parts = fechaFin.split("-").map(Number);
+    const y = parts[0];
+    const m = parts[1];
+    const d = parts[2];
+    const dt = new Date(y, m - 2, d);
+    const yy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const maxDays = new Date(yy, dt.getMonth() + 1, 0).getDate();
+    const dd = String(Math.min(d, maxDays)).padStart(2, "0");
+    fechaInicio = `${yy}-${mm}-${dd}`;
+  }
+
+  // Si las líneas del banco contienen transacciones con fechas ligeramente previas al corte (ej: festivos o fin de semana)
+  if (lineasBanco && lineasBanco.length > 0 && fechaInicio) {
+    const fechasLineas = lineasBanco.map((l) => normalizeDate(l.fecha)).filter(Boolean).sort();
+    if (fechasLineas.length > 0) {
+      const minFecha = fechasLineas[0];
+      if (minFecha < fechaInicio) {
+        const diffMs = new Date(fechaInicio).getTime() - new Date(minFecha).getTime();
+        const diffDias = diffMs / (1000 * 60 * 60 * 24);
+        if (diffDias <= 4) {
+          fechaInicio = minFecha;
+        }
+      }
+    }
+  }
+
+  return { fechaInicio, fechaFin };
+}
+
 export async function conciliarExtracto(entities, payload = {}) {
   const action = payload.action;
-  const extractoId = payload.extracto_id;
+  const extractoId = payload.extracto_id || payload.extractoId || payload.id;
 
   if (action === "iniciarConciliacion") {
     const ext = (await entities.ExtractoProducto.get(extractoId)) || { id: extractoId };
     const prod = ext.producto_id ? await entities.ProductoCredito.get(ext.producto_id).catch(() => null) : null;
     const lineasBanco = (await entities.LineaExtracto.filter({ extracto_id: extractoId })) || [];
     
-    const movsTodos = (await entities.MovimientoContable.list("-fecha", 15000)) || [];
+    const { fechaInicio, fechaFin } = await determinarVentanaConciliacion(entities, ext, prod, lineasBanco);
+
+    const movsTodos = (await entities.MovimientoContable.list("-fecha", 35000)) || [];
+    
+    // Movimientos del período dentro de la ventana de corte
     const movs = movsTodos.filter(m => {
       const estado = String(m.estado || "activo").toLowerCase().trim();
-      if (estado === "inactivo" || estado === "anulado" || estado === "reversado") return false;
+      if (estado === "inactivo" || estado === "anulado" || estado === "reversado" || estado === "ignorado") return false;
+      if (m.es_anulacion || m.es_reversion) return false;
+      if (m.conciliacion_ignorada || m.estado_conciliacion === "ignorado") return false;
+
       const matchProd = (ext.producto_id && m.producto_credito_id === ext.producto_id) ||
                         (prod?.subcuenta_puc && String(m.subcuenta).trim() === String(prod.subcuenta_puc).trim());
-      return matchProd;
+      if (!matchProd) return false;
+
+      // Asignación explícita
+      if (m.extracto_id && m.extracto_id === ext.id) return true;
+      if (m.periodo_extracto && m.periodo_extracto === ext.periodo) return true;
+
+      // Si pertenece explícitamente a otro extracto o período diferente
+      if (m.extracto_id && m.extracto_id !== ext.id) return false;
+      if (m.periodo_extracto && m.periodo_extracto !== ext.periodo) return false;
+
+      // Ventana de corte estricta: entre corte anterior y corte actual
+      const fMov = normalizeDate(m.fecha);
+      if (fMov && fechaInicio && fechaFin) {
+        return fMov >= fechaInicio && fMov <= fechaFin;
+      }
+      if (fMov && fechaFin) {
+        return fMov <= fechaFin;
+      }
+      return true;
     });
 
-    const sumaCreditos = movs.reduce((s, m) => s + (Number(m.credito) || 0), 0);
-    const sumaDebitos = movs.reduce((s, m) => s + (Number(m.debito) || 0), 0);
-    const saldoSistema = parseAndRoundCOP(sumaCreditos - sumaDebitos, 2);
+    // Desglose de movimientos del período: Abonos, Compras y Gastos Financieros
+    let totalAbonos = 0;
+    let totalGastosFinancieros = 0;
+    let totalCompras = 0;
+    let cantidadAbonos = 0;
+    let cantidadGastosFinancieros = 0;
+    let cantidadCompras = 0;
+
+    movs.forEach(m => {
+      const deb = Number(m.debito) || 0;
+      const cred = Number(m.credito) || 0;
+      const desc = String(m.descripcion || "").toLowerCase();
+      const esAbono = m.tipo_movimiento_tdc === "abono" || (deb > 0 && cred === 0);
+      const esFinanciero = m.tipo_movimiento_tdc === "financiero" ||
+        /interes|cuota.*manejo|seguro|comision|financier|4x1000|gravamen/i.test(desc) ||
+        (desc.includes("ajuste al peso") && cred > 0);
+
+      if (esAbono) {
+        totalAbonos += deb;
+        cantidadAbonos++;
+      } else if (esFinanciero) {
+        totalGastosFinancieros += cred;
+        cantidadGastosFinancieros++;
+      } else {
+        totalCompras += cred;
+        cantidadCompras++;
+      }
+    });
+
+    totalAbonos = parseAndRoundCOP(totalAbonos, 2);
+    totalGastosFinancieros = parseAndRoundCOP(totalGastosFinancieros, 2);
+    totalCompras = parseAndRoundCOP(totalCompras, 2);
+
+    const saldoSistema = parseAndRoundCOP(totalCompras + totalGastosFinancieros - totalAbonos, 2);
     const saldoAnterior = parseAndRoundCOP(ext.saldo_anterior, 2);
     let diferencia = parseAndRoundCOP((Number(ext.saldo_a_pagar) || 0) - saldoAnterior - saldoSistema, 2);
     if (Math.abs(diferencia) < 0.01) diferencia = 0;
+
+    // Comparativa de saldo anterior del extracto con el saldo que tenía la tarjeta en el sistema ANTES de este período
+    const movsPrevios = movsTodos.filter(m => {
+      const estado = String(m.estado || "activo").toLowerCase().trim();
+      if (estado === "inactivo" || estado === "anulado" || estado === "reversado" || estado === "ignorado") return false;
+      if (m.es_anulacion || m.es_reversion) return false;
+      const matchProd = (ext.producto_id && m.producto_credito_id === ext.producto_id) ||
+                        (prod?.subcuenta_puc && String(m.subcuenta).trim() === String(prod.subcuenta_puc).trim());
+      if (!matchProd) return false;
+      const fMov = normalizeDate(m.fecha);
+      return fMov && fechaInicio && fMov < fechaInicio;
+    });
+
+    const saldoPrevioCreditos = movsPrevios.reduce((s, m) => s + (Number(m.credito) || 0), 0);
+    const saldoPrevioDebitos = movsPrevios.reduce((s, m) => s + (Number(m.debito) || 0), 0);
+    const saldoSistemaAnterior = parseAndRoundCOP(saldoPrevioCreditos - saldoPrevioDebitos, 2);
+    const desfaseSaldoAnterior = parseAndRoundCOP(saldoAnterior - saldoSistemaAnterior, 2);
+    const hayDesfaseSaldoAnterior = Math.abs(desfaseSaldoAnterior) >= 1.0;
 
     return {
       extracto: { ...ext, saldo_sistema: saldoSistema, diferencia_saldo: diferencia },
       movimientos_sistema: movs,
       lineas_banco: lineasBanco,
-      saldo_banco: ext.saldo_a_pagar || 0,
+      saldo_banco: Number(ext.saldo_a_pagar) || 0,
       saldo_sistema: saldoSistema,
+      total_abonos_sistema: totalAbonos,
+      total_compras_sistema: totalCompras,
+      total_gastos_financieros_sistema: totalGastosFinancieros,
+      cantidad_abonos_sistema: cantidadAbonos,
+      cantidad_compras_sistema: cantidadCompras,
+      cantidad_gastos_financieros_sistema: cantidadGastosFinancieros,
       diferencia_saldo: diferencia,
       saldo_anterior: saldoAnterior,
-      fecha_inicio_rango: ext.fecha_inicio || ext.fecha_corte,
-      fecha_fin_rango: ext.fecha_corte
+      saldo_sistema_anterior: saldoSistemaAnterior,
+      desfase_saldo_anterior: desfaseSaldoAnterior,
+      hay_desfase_saldo_anterior: hayDesfaseSaldoAnterior,
+      fecha_inicio_rango: fechaInicio,
+      fecha_fin_rango: fechaFin
     };
   }
 
@@ -2136,25 +2326,84 @@ export async function conciliarExtracto(entities, payload = {}) {
     const prod = ext.producto_id ? await entities.ProductoCredito.get(ext.producto_id).catch(() => null) : null;
     const lineasBanco = (await entities.LineaExtracto.filter({ extracto_id: extractoId })) || [];
     
-    const movsTodos = (await entities.MovimientoContable.list("-fecha", 15000)) || [];
+    const { fechaInicio, fechaFin } = await determinarVentanaConciliacion(entities, ext, prod, lineasBanco);
+
+    const movsTodos = (await entities.MovimientoContable.list("-fecha", 35000)) || [];
     const movs = movsTodos.filter(m => {
       const estado = String(m.estado || "activo").toLowerCase().trim();
-      if (estado === "inactivo" || estado === "anulado" || estado === "reversado") return false;
+      if (estado === "inactivo" || estado === "anulado" || estado === "reversado" || estado === "ignorado") return false;
+      if (m.es_anulacion || m.es_reversion) return false;
+      if (m.conciliacion_ignorada || m.estado_conciliacion === "ignorado") return false;
+
       const matchProd = (ext.producto_id && m.producto_credito_id === ext.producto_id) ||
                         (prod?.subcuenta_puc && String(m.subcuenta).trim() === String(prod.subcuenta_puc).trim());
-      return matchProd;
+      if (!matchProd) return false;
+
+      // Asignación explícita
+      if (m.extracto_id && m.extracto_id === ext.id) return true;
+      if (m.periodo_extracto && m.periodo_extracto === ext.periodo) return true;
+
+      // Si pertenece explícitamente a otro extracto o período diferente
+      if (m.extracto_id && m.extracto_id !== ext.id) return false;
+      if (m.periodo_extracto && m.periodo_extracto !== ext.periodo) return false;
+
+      // Ventana de corte estricta: entre corte anterior y corte actual
+      const fMov = normalizeDate(m.fecha);
+      if (fMov && fechaInicio && fechaFin) {
+        return fMov >= fechaInicio && fMov <= fechaFin;
+      }
+      if (fMov && fechaFin) {
+        return fMov <= fechaFin;
+      }
+      return true;
     });
+
+    const movsIgnorados = movsTodos.filter(m => {
+      const estado = String(m.estado || "").toLowerCase().trim();
+      if (estado !== "ignorado" && !m.conciliacion_ignorada && m.estado_conciliacion !== "ignorado") return false;
+      const matchProd = (ext.producto_id && m.producto_credito_id === ext.producto_id) ||
+                        (prod?.subcuenta_puc && String(m.subcuenta).trim() === String(prod.subcuenta_puc).trim());
+      if (!matchProd) return false;
+      const fMov = normalizeDate(m.fecha);
+      if (fMov && fechaInicio && fechaFin) return fMov >= fechaInicio && fMov <= fechaFin;
+      if (fMov && fechaFin) return fMov <= fechaFin;
+      return true;
+    });
+
+    const lineasActivas = lineasBanco.filter(l => l.estado_conciliacion !== "ignorado");
+    const lineasIgnoradas = lineasBanco.filter(l => l.estado_conciliacion === "ignorado");
 
     const conciliados = [];
     const faltantes = [];
     const sobrantesPool = [...movs];
 
-    for (const lb of lineasBanco) {
+    for (const lb of lineasActivas) {
       const valLinea = Number(lb.valor) || 0;
-      const matchIdx = sobrantesPool.findIndex(m => {
-        const valMov = Number(m.debito > 0 ? m.debito : m.credito) || 0;
-        return Math.abs(valMov - valLinea) < 1.0;
-      });
+      const fLinea = normalizeDate(lb.fecha);
+
+      // 1. Coincidencia por vínculo previo directo
+      let matchIdx = -1;
+      if (lb.movimiento_sistema_id) {
+        matchIdx = sobrantesPool.findIndex(m => m.id === lb.movimiento_sistema_id);
+      }
+
+      // 2. Coincidencia por valor y fecha idéntica
+      if (matchIdx === -1) {
+        matchIdx = sobrantesPool.findIndex(m => {
+          const valMov = Number(m.debito > 0 ? m.debito : m.credito) || 0;
+          if (Math.abs(valMov - valLinea) >= 1.0) return false;
+          const fMov = normalizeDate(m.fecha);
+          return fLinea && fMov && fLinea === fMov;
+        });
+      }
+
+      // 3. Coincidencia por valor dentro de la ventana de corte
+      if (matchIdx === -1) {
+        matchIdx = sobrantesPool.findIndex(m => {
+          const valMov = Number(m.debito > 0 ? m.debito : m.credito) || 0;
+          return Math.abs(valMov - valLinea) < 1.0;
+        });
+      }
 
       if (matchIdx !== -1) {
         conciliados.push({
@@ -2164,19 +2413,33 @@ export async function conciliarExtracto(entities, payload = {}) {
         sobrantesPool.splice(matchIdx, 1);
       } else {
         faltantes.push({
-          linea_banco: lb
+          linea_banco: lb,
+          en_disputa: lb.estado_conciliacion === "en_disputa"
         });
       }
     }
 
     const sobrantes = sobrantesPool.map(m => ({
-      movimiento_sistema: m
+      movimiento_sistema: m,
+      en_disputa: String(m.estado || "").toLowerCase().trim() === "en_disputa"
     }));
+
+    const disputados = [
+      ...faltantes.filter(f => f.en_disputa).map(f => ({ tipo: "linea_banco", data: f.linea_banco })),
+      ...sobrantes.filter(s => s.en_disputa).map(s => ({ tipo: "movimiento_sistema", data: s.movimiento_sistema }))
+    ];
+
+    const ignorados = [
+      ...lineasIgnoradas.map(l => ({ tipo: "linea_banco", data: l, id: l.id })),
+      ...movsIgnorados.map(m => ({ tipo: "movimiento_sistema", data: m, id: m.id }))
+    ];
 
     return {
       conciliados,
       faltantes,
       sobrantes,
+      disputados,
+      ignorados,
       diferencias: [],
       resumen: {
         total_banco: lineasBanco.length,
@@ -2185,6 +2448,235 @@ export async function conciliarExtracto(entities, payload = {}) {
         porcentaje_conciliado: lineasBanco.length > 0 ? Math.round((conciliados.length / lineasBanco.length) * 100) : 0
       }
     };
+  }
+
+  if (action === "marcarSobrante") {
+    const { movimiento_sistema_id, accion } = payload;
+    const mov = await entities.MovimientoContable.get(movimiento_sistema_id);
+    if (!mov) throw new Error("Movimiento no encontrado");
+
+    if (accion === "anular") {
+      if (mov.comprobante_id) {
+        try {
+          await anularComprobante(entities, {
+            comprobante_id: mov.comprobante_id,
+            motivo: "Anulado desde conciliación de extractos (movimiento sobrante)"
+          });
+        } catch (e) {
+          console.warn("Error en anularComprobante:", e);
+        }
+      }
+      await entities.MovimientoContable.update(mov.id, {
+        estado: "anulado"
+      });
+      return { success: true, accion: "anular", mensaje: "Movimiento y comprobante anulados correctamente" };
+    }
+
+    if (accion === "marcar_en_disputa" || accion === "disputa") {
+      const estadoActual = String(mov.estado || "activo").toLowerCase().trim();
+      const nuevoEstado = estadoActual === "en_disputa" ? "activo" : "en_disputa";
+      await entities.MovimientoContable.update(mov.id, {
+        estado: nuevoEstado
+      });
+      return { success: true, accion: "en_disputa", estado: nuevoEstado };
+    }
+
+    if (accion === "ignorar") {
+      const estadoActual = String(mov.estado || "activo").toLowerCase().trim();
+      const nuevoEstado = estadoActual === "ignorado" ? "activo" : "ignorado";
+      await entities.MovimientoContable.update(mov.id, {
+        estado: nuevoEstado
+      });
+      return { success: true, accion: "ignorar", estado: nuevoEstado, ignorado: nuevoEstado === "ignorado" };
+    }
+
+    return { success: true };
+  }
+
+  if (action === "marcarLineaBanco" || action === "marcarLineaExtracto") {
+    const { linea_banco_id, accion } = payload;
+    const linea = await entities.LineaExtracto.get(linea_banco_id);
+    if (!linea) throw new Error("Línea bancaria no encontrada");
+
+    if (accion === "marcar_en_disputa" || accion === "disputa") {
+      const nuevoEstado = linea.estado_conciliacion === "en_disputa" ? "sin_conciliar" : "en_disputa";
+      await entities.LineaExtracto.update(linea.id, {
+        estado_conciliacion: nuevoEstado
+      });
+      return { success: true, accion: "en_disputa", estado_conciliacion: nuevoEstado };
+    }
+
+    if (accion === "ignorar") {
+      const nuevoEstado = linea.estado_conciliacion === "ignorado" ? "sin_conciliar" : "ignorado";
+      await entities.LineaExtracto.update(linea.id, {
+        estado_conciliacion: nuevoEstado
+      });
+      return { success: true, accion: "ignorar", estado_conciliacion: nuevoEstado };
+    }
+
+    if (accion === "anular" || accion === "eliminar") {
+      await entities.LineaExtracto.delete(linea.id);
+      return { success: true, accion: "eliminar" };
+    }
+
+    return { success: true };
+  }
+
+  if (action === "ajustarMovimientoDiferente") {
+    const { linea_banco_id, movimiento_sistema_id, accion } = payload;
+    const linea = await entities.LineaExtracto.get(linea_banco_id);
+    const mov = movimiento_sistema_id ? await entities.MovimientoContable.get(movimiento_sistema_id) : null;
+    if (!linea) throw new Error("Línea bancaria no encontrada");
+
+    if (accion === "anular_y_recrear") {
+      if (mov && mov.comprobante_id) {
+        try {
+          await anularComprobante(entities, {
+            comprobante_id: mov.comprobante_id,
+            motivo: "Reemplazado por valor exacto del extracto bancario"
+          });
+        } catch {
+          await entities.MovimientoContable.update(mov.id, { estado: "anulado", es_anulacion: true });
+        }
+      }
+      const ext = await entities.ExtractoProducto.get(linea.extracto_id);
+      const prod = await entities.ProductoCredito.get(linea.producto_id);
+      const esCargo = linea.naturaleza === "cargo";
+      const res = await createComprobante(entities, {
+        fecha: linea.fecha,
+        tipo: "diario",
+        descripcion: `Ajuste conciliación - ${linea.descripcion}`,
+        movimientos: [
+          {
+            subcuenta: prod?.subcuenta_puc || "211001",
+            debito: esCargo ? 0 : linea.valor,
+            credito: esCargo ? linea.valor : 0,
+            descripcion: linea.descripcion,
+            producto_credito_id: prod?.id,
+            tipo_movimiento_tdc: esCargo ? linea.tipo : "abono",
+            periodo_extracto: ext?.periodo
+          },
+          {
+            subcuenta: esCargo ? "510502" : "111005",
+            debito: esCargo ? linea.valor : 0,
+            credito: esCargo ? 0 : linea.valor,
+            descripcion: linea.descripcion
+          }
+        ]
+      });
+      await entities.LineaExtracto.update(linea_banco_id, {
+        estado_conciliacion: "conciliado",
+        movimiento_sistema_id: res.movimientos?.[0]?.id || ""
+      });
+      return { success: true };
+    }
+
+    if (accion === "crear_diferencia") {
+      const ext = await entities.ExtractoProducto.get(linea.extracto_id);
+      const prod = await entities.ProductoCredito.get(linea.producto_id);
+      const valBanco = Number(linea.valor) || 0;
+      const valSistema = Number(mov?.credito > 0 ? mov.credito : mov?.debito) || 0;
+      const dif = parseAndRoundCOP(valBanco - valSistema, 2);
+      const esCargo = dif > 0;
+      const absDif = Math.abs(dif);
+
+      await createComprobante(entities, {
+        fecha: linea.fecha,
+        tipo: "diario",
+        descripcion: `Ajuste diferencia extracto vs sistema - ${linea.descripcion}`,
+        movimientos: [
+          {
+            subcuenta: prod?.subcuenta_puc || "211001",
+            debito: esCargo ? 0 : absDif,
+            credito: esCargo ? absDif : 0,
+            descripcion: `Ajuste diferencia ${linea.descripcion}`,
+            producto_credito_id: prod?.id,
+            tipo_movimiento_tdc: esCargo ? "financiero" : "abono",
+            periodo_extracto: ext?.periodo
+          },
+          {
+            subcuenta: esCargo ? "510502" : "429553",
+            debito: esCargo ? absDif : 0,
+            credito: esCargo ? 0 : absDif,
+            descripcion: `Ajuste diferencia ${linea.descripcion}`
+          }
+        ]
+      });
+
+      await entities.LineaExtracto.update(linea_banco_id, {
+        estado_conciliacion: "conciliado",
+        movimiento_sistema_id: mov?.id || ""
+      });
+      return { success: true };
+    }
+
+    return { success: true };
+  }
+
+  if (action === "modificarSobrante") {
+    const { movimiento_sistema_id, tipo_mod, nuevo_valor, nueva_fecha, extracto_id } = payload;
+    const mov = await entities.MovimientoContable.get(movimiento_sistema_id);
+    if (!mov) throw new Error("Movimiento no encontrado");
+
+    if (tipo_mod === "vincular_proximo_periodo") {
+      const ext = extracto_id ? await entities.ExtractoProducto.get(extracto_id) : null;
+      let nextPeriodo = "";
+      if (ext?.periodo) {
+        const [yStr, mStr] = ext.periodo.split("-");
+        let y = parseInt(yStr, 10);
+        let m = parseInt(mStr, 10) + 1;
+        if (m > 12) { m = 1; y += 1; }
+        nextPeriodo = `${y}-${String(m).padStart(2, "0")}`;
+      } else {
+        const d = new Date();
+        nextPeriodo = `${d.getFullYear()}-${String(d.getMonth() + 2).padStart(2, "0")}`;
+      }
+      await entities.MovimientoContable.update(mov.id, {
+        periodo_extracto: nextPeriodo,
+        extracto_id: null
+      });
+      return { success: true, nuevo_periodo: nextPeriodo };
+    }
+
+    if (tipo_mod === "cambiar_fecha" && nueva_fecha) {
+      await entities.MovimientoContable.update(mov.id, { fecha: nueva_fecha });
+      if (mov.comprobante_id) {
+        await entities.ComprobanteContable.update(mov.comprobante_id, { fecha: nueva_fecha });
+      }
+      return { success: true, nueva_fecha };
+    }
+
+    if (tipo_mod === "cambiar_valor" && nuevo_valor !== null && nuevo_valor !== undefined) {
+      const esDebito = Number(mov.debito) > 0;
+      const patch = esDebito ? { debito: nuevo_valor } : { credito: nuevo_valor };
+      await entities.MovimientoContable.update(mov.id, patch);
+
+      // Si tiene comprobante con contrapartida directa, ajustar la contrapartida para mantener balance
+      if (mov.comprobante_id) {
+        const movsComp = await entities.MovimientoContable.filter({ comprobante_id: mov.comprobante_id });
+        const contra = (movsComp || []).find(m => m.id !== mov.id);
+        if (contra) {
+          const contraPatch = esDebito ? { credito: nuevo_valor } : { debito: nuevo_valor };
+          await entities.MovimientoContable.update(contra.id, contraPatch);
+        }
+        await entities.ComprobanteContable.update(mov.comprobante_id, {
+          total_debito: nuevo_valor,
+          total_credito: nuevo_valor
+        });
+      }
+      return { success: true, nuevo_valor };
+    }
+
+    if (tipo_mod === "asignar_cuenta_pendiente") {
+      await entities.MovimientoContable.update(mov.id, {
+        subcuenta: "139006",
+        cuenta_nombre: "Cuentas por cobrar pendientes de cobro",
+        producto_credito_id: null
+      });
+      return { success: true };
+    }
+
+    return { success: true };
   }
 
   if (action === "crearMovimientoFaltante") {
@@ -2231,29 +2723,102 @@ export async function conciliarExtracto(entities, payload = {}) {
 
   if (action === "ajustarAlPeso") {
     const ext = await entities.ExtractoProducto.get(extractoId);
-    const prod = await entities.ProductoCredito.get(ext.producto_id);
-    const diff = parseAndRoundCOP(Math.abs(Number(ext.diferencia_saldo) || 0), 2);
+    if (!ext) throw new Error("Extracto no encontrado");
+    const prod = ext.producto_id ? await entities.ProductoCredito.get(ext.producto_id).catch(() => null) : null;
+    
+    // Obtener ventana y movimientos reales para calcular diferencia exacta
+    const lineasBanco = (await entities.LineaExtracto.filter({ extracto_id: extractoId })) || [];
+    const { fechaInicio, fechaFin } = await determinarVentanaConciliacion(entities, ext, prod, lineasBanco);
+    const movsTodos = (await entities.MovimientoContable.list("-fecha", 35000)) || [];
+    const movs = movsTodos.filter(m => {
+      const estado = String(m.estado || "activo").toLowerCase().trim();
+      if (estado === "inactivo" || estado === "anulado" || estado === "reversado" || estado === "ignorado") return false;
+      if (m.es_anulacion || m.es_reversion) return false;
+      if (m.conciliacion_ignorada || m.estado_conciliacion === "ignorado") return false;
+
+      const matchProd = (ext.producto_id && m.producto_credito_id === ext.producto_id) ||
+                        (prod?.subcuenta_puc && String(m.subcuenta).trim() === String(prod.subcuenta_puc).trim());
+      if (!matchProd) return false;
+
+      if (m.extracto_id && m.extracto_id === ext.id) return true;
+      if (m.periodo_extracto && m.periodo_extracto === ext.periodo) return true;
+      if (m.extracto_id && m.extracto_id !== ext.id) return false;
+      if (m.periodo_extracto && m.periodo_extracto !== ext.periodo) return false;
+
+      const fMov = normalizeDate(m.fecha);
+      if (fMov && fechaInicio && fechaFin) return fMov >= fechaInicio && fMov <= fechaFin;
+      if (fMov && fechaFin) return fMov <= fechaFin;
+      return true;
+    });
+
+    const sumaCreditos = movs.reduce((s, m) => s + (Number(m.credito) || 0), 0);
+    const sumaDebitos = movs.reduce((s, m) => s + (Number(m.debito) || 0), 0);
+    const saldoSistema = parseAndRoundCOP(sumaCreditos - sumaDebitos, 2);
+    const saldoAnterior = parseAndRoundCOP(ext.saldo_anterior, 2);
+    const saldoBanco = Number(ext.saldo_a_pagar) || 0;
+
+    let diff = parseAndRoundCOP(saldoBanco - saldoAnterior - saldoSistema, 2);
+    if (payload.diferencia !== undefined && Math.abs(Number(payload.diferencia) - diff) < 1.0) {
+      diff = Number(payload.diferencia);
+    }
+
+    if (Math.abs(diff) < 0.01) {
+      await entities.ExtractoProducto.update(extractoId, { diferencia_saldo: 0 });
+      return { diferencia_ajustada: 0, mensaje: "La conciliación ya está totalmente cuadrada ($0)." };
+    }
+
+    const absDiff = parseAndRoundCOP(Math.abs(diff), 2);
+    // Si diff > 0: El banco tiene mayor saldo a pagar que lo registrado en el sistema.
+    // La deuda de la tarjeta debe aumentar (CRÉDITO), y la contrapartida es un GASTO (DÉBITO 510502).
+    // Si diff < 0: El sistema tiene mayor deuda registrada que el extracto del banco.
+    // La deuda de la tarjeta debe disminuir (DÉBITO), y la contrapartida es un INGRESO (CRÉDITO 429553).
+    const esGasto = diff > 0;
+    const fechaAjuste = ext.fecha_corte || (fechaFin || new Date().toISOString().split("T")[0]);
+    const subcuentaContra = esGasto ? "510502" : "429553"; // 510502 Gastos Diversos / 429553 Aprovechamientos
+
+    const movsAjuste = [
+      {
+        subcuenta: prod?.subcuenta_puc || "211001",
+        debito: esGasto ? 0 : absDiff,
+        credito: esGasto ? absDiff : 0,
+        descripcion: `Ajuste al peso conciliación ${ext.periodo} - ${prod?.nombre || ''}`,
+        producto_credito_id: prod?.id,
+        tipo_movimiento_tdc: esGasto ? "financiero" : "abono",
+        periodo_extracto: ext.periodo
+      },
+      {
+        subcuenta: subcuentaContra,
+        debito: esGasto ? absDiff : 0,
+        credito: esGasto ? 0 : absDiff,
+        descripcion: `Ajuste al peso (${esGasto ? 'Gasto' : 'Ingreso'}) residual período ${ext.periodo}`
+      }
+    ];
 
     const res = await createComprobante(entities, {
-      fecha: ext.fecha_corte || new Date().toISOString().split('T')[0],
+      fecha: fechaAjuste,
       tipo: "diario",
       descripcion: `Ajuste al peso - conciliación ${ext.periodo} - ${prod?.nombre || ''}`,
-      movimientos: [
-        { subcuenta: prod?.subcuenta_puc || "211001", debito: 0, credito: diff, descripcion: `Ajuste al peso`, producto_credito_id: prod?.id },
-        { subcuenta: "510502", debito: diff, credito: 0, descripcion: `Ajuste residual ${ext.periodo}` }
-      ]
+      periodo_operacion: ext.periodo,
+      movimientos: movsAjuste
     });
 
     await entities.ExtractoProducto.update(extractoId, { diferencia_saldo: 0 });
-    return { comprobante: res.comprobante, diferencia_ajustada: diff };
+    return { comprobante: res.comprobante, diferencia_ajustada: diff, es_gasto: esGasto };
   }
 
   if (action === "cerrarConciliacion") {
-    await entities.ExtractoProducto.update(extractoId, {
+    const idToClose = extractoId || payload.extracto_id || payload.extractoId;
+    if (!idToClose) throw new Error("ID de extracto no especificado");
+    const updateData = {
       estado_conciliacion: "cerrado",
-      fecha_conciliacion: new Date().toISOString().substring(0, 10)
-    });
-    return { extracto_cerrado: extractoId, cerrado_ok: true };
+      fecha_conciliacion: new Date().toISOString().substring(0, 10),
+      conciliado_por_email: payload.email || "multipagosstm@gmail.com"
+    };
+    if (payload.diferencia_saldo !== undefined) {
+      updateData.diferencia_saldo = Number(payload.diferencia_saldo);
+    }
+    await entities.ExtractoProducto.update(idToClose, updateData);
+    return { extracto_cerrado: idToClose, cerrado_ok: true, success: true };
   }
 
   if (action === "eliminarConciliacion") {

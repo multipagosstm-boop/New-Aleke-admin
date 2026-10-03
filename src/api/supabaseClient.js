@@ -196,7 +196,10 @@ export function createEntityRepository(entityName) {
 
         if (targetLimit <= 1000) {
           let query = client.from(table).select('*');
-          if (col) query = query.order(col, { ascending: !isDesc });
+          if (col) {
+            query = query.order(col, { ascending: !isDesc });
+            if (col !== 'id') query = query.order('id', { ascending: !isDesc });
+          }
           query = query.limit(targetLimit);
           const { data, error } = await query;
           if (error) {
@@ -212,7 +215,10 @@ export function createEntityRepository(entityName) {
           while (dbData.length < targetLimit) {
             const to = from + Math.min(PAGE_SIZE, targetLimit - dbData.length) - 1;
             let query = client.from(table).select('*');
-            if (col) query = query.order(col, { ascending: !isDesc });
+            if (col) {
+              query = query.order(col, { ascending: !isDesc });
+              if (col !== 'id') query = query.order('id', { ascending: !isDesc });
+            }
             query = query.range(from, to);
             const { data, error } = await query;
             if (error) {
@@ -257,7 +263,10 @@ export function createEntityRepository(entityName) {
               }
             }
           }
-          if (col) q = q.order(col, { ascending: !isDesc });
+          if (col) {
+            q = q.order(col, { ascending: !isDesc });
+            if (col !== 'id') q = q.order('id', { ascending: !isDesc });
+          }
           return q;
         };
 
@@ -337,12 +346,12 @@ export function createEntityRepository(entityName) {
       if (!id) return null;
       const client = getSupabase();
       if (client) {
-        const { data, error } = await client.from(table).select('*').eq('id', id).single();
+        const { data, error } = await client.from(table).select('*').eq('id', id).maybeSingle();
         if (error) {
           console.warn(`Supabase get error for ${table} (${id}):`, error.message);
           return getMemoryCollection(table).get(id) || null;
         }
-        return data;
+        return data || getMemoryCollection(table).get(id) || null;
       }
       return getMemoryCollection(table).get(id) || null;
     },

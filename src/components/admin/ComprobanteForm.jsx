@@ -46,17 +46,29 @@ export default function ComprobanteForm({
         return c && (c.clase === 4 || c.clase === 5 || c.clase === 6 || c.clase === 7);
       });
       setModo(hasResultado ? "resultado" : "balance");
-      setMovimientos(editingMovimientos.map((m) => ({
-        subcuenta: m.subcuenta,
-        debito: m.debito || "",
-        credito: m.credito || "",
-        descripcion: m.descripcion || "abono",
-        tercero: m.tercero || "",
-        cliente_id: m.cliente_id || "",
-        cuenta_ahorro_id: m.cuenta_ahorro_id || "",
-        producto_credito_id: m.producto_credito_id || "",
-        tipo_movimiento_tdc: m.tipo_movimiento_tdc || ""
-      })));
+      setMovimientos(editingMovimientos.map((m) => {
+        let prodId = m.producto_credito_id || "";
+        let cdaId = m.cuenta_ahorro_id || "";
+        if (!prodId && m.subcuenta) {
+          const tdcMatch = (productosCredito || []).find((p) => String(p.subcuenta_puc).trim() === String(m.subcuenta).trim());
+          if (tdcMatch) prodId = tdcMatch.id;
+        }
+        if (!cdaId && m.subcuenta) {
+          const cdaMatch = (cuentasAhorro || []).find((c) => String(c.subcuenta_puc).trim() === String(m.subcuenta).trim());
+          if (cdaMatch) cdaId = cdaMatch.id;
+        }
+        return {
+          subcuenta: m.subcuenta,
+          debito: m.debito || "",
+          credito: m.credito || "",
+          descripcion: m.descripcion || "abono",
+          tercero: m.tercero || "",
+          cliente_id: m.cliente_id || "",
+          cuenta_ahorro_id: cdaId,
+          producto_credito_id: prodId,
+          tipo_movimiento_tdc: m.tipo_movimiento_tdc || ""
+        };
+      }));
     } else {
       setFecha(new Date().toISOString().substring(0, 10));
       setTipo("diario");
