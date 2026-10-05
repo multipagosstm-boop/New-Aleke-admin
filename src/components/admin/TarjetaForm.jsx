@@ -75,8 +75,8 @@ export default function TarjetaForm({ open, onOpenChange, onSaved, editing, clie
     return null;
   })();
 
-  // Para TDC la cuenta PUC se crea automáticamente en el backend
-  const esAutoPuc = tipo === "TDC" && !editing;
+  // La cuenta contable PUC se crea automáticamente en el backend para nuevos productos
+  const esAutoPuc = !editing;
 
   const handleSubmit = async () => {
     if (!banco || !titularId) { setError("Complete todos los campos obligatorios"); return; }
@@ -95,7 +95,7 @@ export default function TarjetaForm({ open, onOpenChange, onSaved, editing, clie
       setError(`Ya existe una tarjeta con estos datos: ${duplicado.producto.nombre} (${duplicado.producto.nomenclatura}).`);
       return;
     }
-    if (!esAutoPuc && !editing && !subcuentaPuc) { setError("Seleccione la cuenta contable (PUC)"); return; }
+    if (editing && !subcuentaPuc) { setError("Seleccione la cuenta contable (PUC)"); return; }
 
     setSaving(true);
     setError("");
@@ -120,14 +120,15 @@ export default function TarjetaForm({ open, onOpenChange, onSaved, editing, clie
           version_consecutivo: editing.version_consecutivo || 1
         };
         await base44.entities.ProductoCredito.update(editing.id, data);
-      } else if (esAutoPuc) {
-        // TDC: crear via backend con PUC automático
+      } else {
+        // Creación via backend con PUC automático según jerarquía (2110 para TDC, 2105 para otros productos)
         await base44.functions.invoke("gestionarTarjeta", {
           operacion: "crear",
           tipo,
           banco,
           titular_id: titularId,
           cupo: Number(cupo) || 0,
+          saldo: 0,
           fecha_corte: fechaCorteFinal,
           digitos_ref: digitosEfectivos,
           nombre: nombreGenerado,
@@ -136,30 +137,8 @@ export default function TarjetaForm({ open, onOpenChange, onSaved, editing, clie
           categoria: tipo === "TDC" ? categoria : "",
           corte_modo: corteModo,
           corte_semana: corteModo === "dia_semana" ? Number(corteSemana) : 0,
-          corte_dia_semana: corteModo === "dia_semana" ? Number(corteDiaSemana) : 0
-        });
-      } else {
-        // Otros tipos: creación directa con PUC manual
-        await base44.entities.ProductoCredito.create({
-          nombre: nombreGenerado,
-          numero_completo: numeroCompleto,
-          tipo,
-          banco,
-          subcuenta_puc: subcuentaPuc,
-          titular_id: titularId,
-          cupo: Number(cupo) || 0,
-          saldo: 0,
-          fecha_corte: fechaCorteFinal,
-          corte_modo: corteModo,
-          corte_semana: corteModo === "dia_semana" ? Number(corteSemana) : undefined,
-          corte_dia_semana: corteModo === "dia_semana" ? Number(corteDiaSemana) : undefined,
-          estado: "activo",
-          version_consecutivo: 1,
-          codigo_interno: `${banco}${String(productosExistentes.filter(p => p.banco === banco && p.tipo === tipo).length + 1).padStart(3, "0")}`,
-          nomenclatura: `${banco}${String(productosExistentes.filter(p => p.banco === banco && p.tipo === tipo).length + 1).padStart(3, "0")}`,
-          operacion: "creacion",
-          operacion_fecha: new Date().toISOString(),
-          operacion_detalle: "Creación inicial"
+          corte_dia_semana: corteModo === "dia_semana" ? Number(corteDiaSemana) : 0,
+          subcuenta_puc: subcuentaPuc || undefined
         });
       }
       onSaved();
@@ -256,12 +235,14 @@ export default function TarjetaForm({ open, onOpenChange, onSaved, editing, clie
           </div>
           {esAutoPuc ? (
             <div className="text-xs text-muted-foreground bg-muted/50 rounded-md p-2">
-              La cuenta contable (PUC) se creará automáticamente bajo 2110 — Tarjetas de Crédito.
+              {tipo === "TDC"
+                ? "La cuenta contable (PUC) se creará automáticamente bajo 2110 — Tarjetas de Crédito."
+                : `La cuenta contable (PUC) se creará automáticamente bajo 2105 — Otros Productos Bancarios (${TIPO_PRODUCTO[tipo] || tipo}).`}
             </div>
           ) : (
             <div>
               <Label>Subcuenta PUC (transaccional) *</Label>
-              <Select value={subcuentaPuc} onValueChange={setSubcuentaPuc} disabled={!!editing}>
+              <Select value={subcuentaPuc} onValueChange={setSubcuentaPuc}>
                 <SelectTrigger><SelectValue placeholder="Seleccionar cuenta contable" /></SelectTrigger>
                 <SelectContent>
                   {pucTransaccional.map((c) => <SelectItem key={c.id} value={String(c.codigo)}>{c.codigo} — {c.concepto}</SelectItem>)}

@@ -38,25 +38,25 @@ export function buildNomenclatura(codigoInterno, version) {
   return version > 1 ? `${codigoInterno}-${version}` : codigoInterno;
 }
 
-// === Creación automática de cuenta contable (PUC) para TDC ===
+// === Creación automática de cuenta contable (PUC) para TDC (2110) y otros productos de crédito (2105) ===
 
-async function encontrarSubcuentaBanco(base44, bancoName) {
+async function encontrarSubcuentaBanco(base44, bancoName, parentCuenta = 2110) {
   const todas = await base44.asServiceRole.entities.Cuenta.filter(
     { nivel: "Subcuenta" }, "codigo", 500
   );
-  const subcuentas2110 = todas.filter((c) => c.codigo >= 211001 && c.codigo <= 211099);
+  const subcuentas = todas.filter((c) => Math.floor(c.codigo / 100) === parentCuenta);
   const lower = bancoName.toLowerCase();
-  return subcuentas2110.find((c) =>
+  return subcuentas.find((c) =>
     (c.concepto || "").toLowerCase().includes(lower)
   ) || null;
 }
 
-async function crearSubcuentaBanco(base44, bancoName) {
+async function crearSubcuentaBanco(base44, bancoName, parentCuenta = 2110) {
   const todas = await base44.asServiceRole.entities.Cuenta.filter(
     { nivel: "Subcuenta" }, "codigo", 500
   );
-  const subcuentas2110 = todas.filter((c) => c.codigo >= 211001 && c.codigo <= 211099);
-  const maxCode = subcuentas2110.reduce((max, c) => Math.max(max, c.codigo), 211000);
+  const subcuentas = todas.filter((c) => Math.floor(c.codigo / 100) === parentCuenta);
+  const maxCode = subcuentas.reduce((max, c) => Math.max(max, c.codigo), parentCuenta * 100);
   const newCode = maxCode + 1;
 
   return await base44.asServiceRole.entities.Cuenta.create({
@@ -65,7 +65,7 @@ async function crearSubcuentaBanco(base44, bancoName) {
     clase: 2,
     clase_nombre: "Pasivo",
     grupo: 21,
-    cuenta: 2110,
+    cuenta: parentCuenta,
     subcuenta: newCode,
     concepto: bancoName,
     naturaleza: "Crédito",
@@ -74,11 +74,12 @@ async function crearSubcuentaBanco(base44, bancoName) {
   });
 }
 
-export async function crearCuentaPUCTarjeta(base44, bancoCode, nombreTarjeta) {
+export async function crearCuentaPUCTarjeta(base44, bancoCode, nombreTarjeta, tipo = "TDC") {
+  const parentCuenta = tipo === "TDC" ? 2110 : 2105;
   const bancoName = getBancoName(bancoCode);
-  let subcuenta = await encontrarSubcuentaBanco(base44, bancoName);
+  let subcuenta = await encontrarSubcuentaBanco(base44, bancoName, parentCuenta);
   if (!subcuenta) {
-    subcuenta = await crearSubcuentaBanco(base44, bancoName);
+    subcuenta = await crearSubcuentaBanco(base44, bancoName, parentCuenta);
   }
 
   const todasAux = await base44.asServiceRole.entities.Cuenta.filter(
@@ -97,7 +98,7 @@ export async function crearCuentaPUCTarjeta(base44, bancoCode, nombreTarjeta) {
     clase: 2,
     clase_nombre: "Pasivo",
     grupo: 21,
-    cuenta: 2110,
+    cuenta: parentCuenta,
     subcuenta: subcuenta.codigo,
     auxiliar: auxNum,
     concepto: nombreTarjeta,
@@ -178,13 +179,13 @@ export async function crearProductoCredito(base44, user, params) {
     operacion_detalle: "Creación inicial"
   };
 
-  if (tipo === "TDC") {
-    const pucCode = await crearCuentaPUCTarjeta(base44, banco, nombreFinal);
+  if (!data.subcuenta_puc) {
+    const pucCode = await crearCuentaPUCTarjeta(base44, banco, nombreFinal, tipo);
     data.subcuenta_puc = pucCode;
   }
 
   const producto = await base44.asServiceRole.entities.ProductoCredito.create(data);
-  return { producto, puc_creado: tipo === "TDC" };
+  return { producto, puc_creado: true };
 }
 
 // === Reemplazo de tarjeta ===

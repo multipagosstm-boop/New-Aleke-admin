@@ -15,6 +15,7 @@ import {
   generarAmortizacionMesVencido,
   estimarInteresesMesVencido
 } from "../lib/pakredito";
+import { calcularNextCodigo, getClaseNombre } from "../lib/cuentasPuc";
 
 export async function calcularTotales(entities, payload = {}) {
   const { periodo = null } = payload || {};
@@ -1597,46 +1598,474 @@ export async function gestionarRooftop(entities, payload = {}) {
   return { success: true, ...payload };
 }
 
+// Mapeo canónico de bancos y subcuentas PUC estándar
+const BANCOS_PUC_MAP = {
+  BA: { name: "Bancolombia", sub1110: 111001, sub2110: 211001, sub2105: 210501 },
+  DA: { name: "Davivienda", sub1110: 111002, sub2110: 211002, sub2105: 210502 },
+  CO: { name: "Colpatria", sub1110: 111003, sub2110: 211003, sub2105: 210503 },
+  IT: { name: "Itaú", sub1110: 111004, sub2110: 211006, sub2105: 210506 },
+  NU: { name: "Nubank", sub1110: 111007, sub2110: 211007, sub2105: 210507 },
+  OC: { name: "Occidente", sub1110: 111008, sub2110: 211008, sub2105: 210508 },
+  PO: { name: "Popular", sub1110: 111009, sub2110: 211009, sub2105: 210509 },
+  TU: { name: "Tuya", sub1110: 111011, sub2110: 211011, sub2105: 210511 },
+  FA: { name: "Falabella", sub1110: 111012, sub2110: 211012, sub2105: 210512 },
+  BB: { name: "BBVA", sub1110: 111013, sub2110: 211013, sub2105: 210513 },
+  BO: { name: "Bogotá", sub1110: 111014, sub2110: 211014, sub2105: 210514 },
+  SE: { name: "Serfinanza", sub1110: 111016, sub2110: 211016, sub2105: 210516 },
+};
+
+function normalizarTextoPUC(txt) {
+  return String(txt || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+/**
+ * Crea o recupera la cuenta contable (nivel Auxiliar) en el PUC para un producto bancario (TDC / Crédito) o CDA.
+ * Respeta rigurosamente la jerarquía del PUC:
+ *  - Cuentas de Ahorro (CDA): Clase 1 -> Grupo 11 -> Cuenta 1110 (Bancos) -> Subcuenta Banco (1110xx) -> Auxiliar (1110xxxx) [Débito]
+ *  - Tarjetas de Crédito (TDC): Clase 2 -> Grupo 21 -> Cuenta 2110 (Tarjetas de Crédito) -> Subcuenta Banco (2110xx) -> Auxiliar (2110xxxx) [Crédito]
+ *  - Otros Créditos (CH, LIB, CR, etc.): Clase 2 -> Grupo 21 -> Cuenta 2105 (Otros Productos Bancarios) -> Subcuenta Banco (2105xx) -> Auxiliar (2105xxxx) [Crédito]
+ */
+export async function crearCuentaPUCProducto(entities, { categoriaProducto, tipo, banco, nombre }) {
+  const isCda = categoriaProducto === "CDA" || tipo === "CDA";
+  const isTdc = !isCda && (categoriaProducto === "TDC" || tipo === "TDC");
+
+  let parentCuentaCodigo = 1110;
+  let clase = 1;
+  let claseNombre = "Activo";
+  let grupo = 11;
+  let naturaleza = "Débito";
+
+  if (isTdc) {
+    parentCuentaCodigo = 2110;
+    clase = 2;
+    claseNombre = "Pasivo";
+    grupo = 21;
+    naturaleza = "Crédito";
+  } else if (!isCda) {
+    parentCuentaCodigo = 2105;
+    clase = 2;
+    claseNombre = "Pasivo";
+    grupo = 21;
+    naturaleza = "Crédito";
+  }
+
+  const bancoKey = String(banco || "").toUpperCase().trim();
+  const bancoDef = BANCOS_PUC_MAP[bancoKey] || Object.values(BANCOS_PUC_MAP).find(
+    (b) => normalizarTextoPUC(b.name) === normalizarTextoPUC(banco)
+  );
+  const bancoNombreFinal = bancoDef?.name || banco || "BANCO";
+
+  // Listar cuentas para determinar códigos disponibles
+  const todasCuentas = await entities.Cuenta.list("codigo", 3000);
+
+  // Subcuentas bajo la cuenta padre
+  const subcuentasExistentes = todasCuentas.filter(
+    (c) => c.nivel === "Subcuenta" && Math.floor(Number(c.codigo) / 100) === parentCuentaCodigo
+  );
+
+  const normBancoBuscado = normalizarTextoPUC(bancoNombreFinal);
+  let subcuentaEncontrada = subcuentasExistentes.find((c) => {
+    const normConcepto = normalizarTextoPUC(c.concepto);
+    if (normBancoBuscado && (normConcepto.includes(normBancoBuscado) || normBancoBuscado.includes(normConcepto))) {
+      return true;
+    }
+    if (bancoKey && bancoKey.length === 2 && normConcepto.includes(normalizarTextoPUC(bancoKey))) {
+      return true;
+    }
+    return false;
+  });
+
+  let subcuentaCodigo;
+  if (subcuentaEncontrada) {
+    subcuentaCodigo = Number(subcuentaEncontrada.codigo);
+  } else {
+    let suggestedCode = null;
+    if (bancoDef) {
+      if (isCda && bancoDef.sub1110) suggestedCode = bancoDef.sub1110;
+      else if (isTdc && bancoDef.sub2110) suggestedCode = bancoDef.sub2110;
+      else if (!isCda && !isTdc && bancoDef.sub2105) suggestedCode = bancoDef.sub2105;
+    }
+
+    const yaUsado = suggestedCode && todasCuentas.some((c) => Number(c.codigo) === suggestedCode);
+    if (!suggestedCode || yaUsado) {
+      const maxSub = subcuentasExistentes.reduce((max, c) => Math.max(max, Number(c.codigo)), parentCuentaCodigo * 100);
+      subcuentaCodigo = maxSub + 1;
+    } else {
+      subcuentaCodigo = suggestedCode;
+    }
+
+    const nuevaSub = await entities.Cuenta.create({
+      codigo: subcuentaCodigo,
+      nivel: "Subcuenta",
+      clase,
+      clase_nombre: claseNombre,
+      grupo,
+      cuenta: parentCuentaCodigo,
+      subcuenta: subcuentaCodigo,
+      auxiliar: null,
+      concepto: bancoNombreFinal.toUpperCase(),
+      naturaleza,
+      tipo_estado: "Balance",
+      es_transaccional: false
+    });
+    todasCuentas.push(nuevaSub);
+  }
+
+  // Buscar o crear cuenta Auxiliar (8 dígitos)
+  const auxiliares = todasCuentas.filter(
+    (c) => c.nivel === "Auxiliar" && Math.floor(Number(c.codigo) / 100) === subcuentaCodigo
+  );
+
+  // Si ya existe un auxiliar con este concepto en la subcuenta, reutilizarlo
+  const normNombre = normalizarTextoPUC(nombre);
+  const existente = auxiliares.find((c) => normalizarTextoPUC(c.concepto) === normNombre);
+  if (existente) {
+    return String(existente.codigo);
+  }
+
+  const baseAux = subcuentaCodigo * 100;
+  const maxAux = auxiliares.reduce((max, c) => Math.max(max, Number(c.codigo)), baseAux);
+  const nextAuxCodigo = maxAux + 1;
+  const auxNum = nextAuxCodigo - baseAux;
+
+  await entities.Cuenta.create({
+    codigo: nextAuxCodigo,
+    nivel: "Auxiliar",
+    clase,
+    clase_nombre: claseNombre,
+    grupo,
+    cuenta: parentCuentaCodigo,
+    subcuenta: subcuentaCodigo,
+    auxiliar: auxNum,
+    concepto: String(nombre || "").trim(),
+    naturaleza,
+    tipo_estado: "Balance",
+    es_transaccional: true
+  });
+
+  return String(nextAuxCodigo);
+}
+
 export async function gestionarTarjeta(entities, payload = {}) {
   const { accion, operacion, ...params } = payload;
   const op = accion || operacion;
+
   if (op === "crear") {
-    const tarjeta = await entities.ProductoCredito.create(params);
-    return { success: true, tarjeta };
+    const {
+      tipo = "TDC",
+      banco,
+      titular_id,
+      cupo,
+      saldo,
+      fecha_corte,
+      digitos_ref,
+      nombre,
+      numero_completo,
+      franquicia,
+      categoria,
+      corte_modo,
+      corte_semana,
+      corte_dia_semana,
+      subcuenta_puc,
+      ...extra
+    } = params;
+
+    if (!banco || !titular_id) {
+      throw new Error("Banco y titular son obligatorios");
+    }
+
+    const dRef = digitos_ref || (numero_completo ? String(numero_completo).replace(/\D/g, "").slice(-4) : "");
+    const nombreFinal = nombre || (tipo === "TDC" ? `TDC - ${dRef}` : `${tipo} - ${dRef}`);
+
+    // Auto-generar código interno y nomenclatura si no vienen
+    let codInterno = params.codigo_interno;
+    let nomenc = params.nomenclatura;
+    if (!codInterno || !nomenc) {
+      const prods = await entities.ProductoCredito.filter({ banco, tipo });
+      let maxNum = 0;
+      prods.forEach((p) => {
+        const base = p.codigo_interno || (p.nomenclatura || "").replace(/-\d+$/, "");
+        const match = base.match(/(\d+)$/);
+        if (match) maxNum = Math.max(maxNum, Number(match[1]));
+      });
+      const generatedCod = `${banco}${String(maxNum + 1).padStart(3, "0")}`;
+      codInterno = codInterno || generatedCod;
+      nomenc = nomenc || generatedCod;
+    }
+
+    // Auto-crear cuenta PUC con la jerarquía correspondiente si no viene asignada
+    let finalSubcuentaPuc = subcuenta_puc;
+    if (!finalSubcuentaPuc) {
+      finalSubcuentaPuc = await crearCuentaPUCProducto(entities, {
+        categoriaProducto: tipo === "TDC" ? "TDC" : "OTRO_CREDITO",
+        tipo,
+        banco,
+        nombre: nombreFinal
+      });
+    }
+
+    const now = new Date().toISOString();
+    const dataToCreate = {
+      ...extra,
+      nombre: nombreFinal,
+      numero_completo: numero_completo ? String(numero_completo).trim() : "",
+      tipo,
+      banco,
+      titular_id,
+      cupo: Number(cupo) || 0,
+      saldo: Number(saldo) || 0,
+      fecha_corte: Number(fecha_corte) || 1,
+      franquicia: tipo === "TDC" ? (franquicia || "") : "",
+      categoria: tipo === "TDC" ? (categoria || "") : "",
+      corte_modo: corte_modo || "dia_fijo",
+      corte_semana: corte_modo === "dia_semana" ? (Number(corte_semana) || 1) : 0,
+      corte_dia_semana: corte_modo === "dia_semana" ? (Number(corte_dia_semana) || 5) : 0,
+      estado: params.estado || "activo",
+      version_consecutivo: params.version_consecutivo || 1,
+      codigo_interno: codInterno,
+      nomenclatura: nomenc,
+      subcuenta_puc: String(finalSubcuentaPuc),
+      operacion: params.operacion || "creacion",
+      operacion_fecha: now,
+      operacion_detalle: params.operacion_detalle || "Creación de producto bancario con cuenta contable PUC"
+    };
+
+    const tarjeta = await entities.ProductoCredito.create(dataToCreate);
+    return { success: true, tarjeta, producto: tarjeta, subcuenta_puc: finalSubcuentaPuc };
   }
+
   if (op === "editar") {
-    const updated = await entities.ProductoCredito.update(params.id || params.tarjeta_id, params);
-    return { success: true, tarjeta: updated };
+    const tarjetaId = params.id || params.tarjeta_id;
+    const updated = await entities.ProductoCredito.update(tarjetaId, params);
+    // Sincronizar concepto en el PUC si cambió de nombre
+    if (params.nombre && updated?.subcuenta_puc) {
+      const cuentas = await entities.Cuenta.filter({ codigo: Number(updated.subcuenta_puc) });
+      if (cuentas.length > 0) {
+        await entities.Cuenta.update(cuentas[0].id, { concepto: params.nombre.trim() });
+      }
+    }
+    return { success: true, tarjeta: updated, producto: updated };
   }
-  if (op === "aumentoCupo") {
-    const updated = await entities.ProductoCredito.update(params.producto_credito_id || params.id, {
-      cupo_total: params.nuevo_cupo
+
+  if (op === "reemplazo") {
+    const tarjetaId = params.tarjeta_id || params.id;
+    const tarjeta = await entities.ProductoCredito.get(tarjetaId);
+    if (!tarjeta) throw new Error("Tarjeta no encontrada");
+
+    const digitos = String(params.nuevos_digitos || "").replace(/\D/g, "").slice(-4);
+    if (!digitos) throw new Error("Debe ingresar los 4 últimos dígitos del nuevo plástico");
+
+    const nuevoNombre = `TDC - ${digitos}`;
+    const codInterno = tarjeta.codigo_interno || (tarjeta.nomenclatura || "").replace(/-\d+$/, "");
+    const nuevaVersion = (Number(tarjeta.version_consecutivo) || 1) + 1;
+    const nuevaNomenclatura = `${codInterno}-${nuevaVersion}`;
+    const now = new Date().toISOString();
+
+    // Actualizar nombre en la cuenta contable existente
+    if (tarjeta.subcuenta_puc) {
+      const cuentas = await entities.Cuenta.filter({ codigo: Number(tarjeta.subcuenta_puc) });
+      if (cuentas.length > 0) {
+        await entities.Cuenta.update(cuentas[0].id, { concepto: nuevoNombre });
+      }
+    }
+
+    // Inhabilitar tarjeta anterior
+    await entities.ProductoCredito.update(tarjetaId, {
+      estado: "inactivo",
+      operacion_detalle: `Reemplazada por ${nuevaNomenclatura} el ${now.substring(0, 10)}`
     });
-    return { success: true, producto: updated };
+
+    // Crear la nueva versión
+    const padreId = tarjeta.version_padre_id || tarjeta.id;
+    const nueva = await entities.ProductoCredito.create({
+      nomenclatura: nuevaNomenclatura,
+      codigo_interno: codInterno,
+      nombre: nuevoNombre,
+      numero_completo: params.numero_completo ? String(params.numero_completo).trim() : (tarjeta.numero_completo || ""),
+      tipo: params.tipo || tarjeta.tipo,
+      banco: params.banco || tarjeta.banco,
+      subcuenta_puc: tarjeta.subcuenta_puc,
+      titular_id: tarjeta.titular_id,
+      cupo: params.cupo !== undefined ? Number(params.cupo) : tarjeta.cupo,
+      saldo: tarjeta.saldo || 0,
+      fecha_corte: params.fecha_corte !== undefined ? Number(params.fecha_corte) : tarjeta.fecha_corte,
+      franquicia: params.franquicia !== undefined ? params.franquicia : tarjeta.franquicia,
+      categoria: params.categoria !== undefined ? params.categoria : tarjeta.categoria,
+      corte_modo: params.corte_modo || tarjeta.corte_modo || "dia_fijo",
+      corte_semana: params.corte_semana !== undefined ? Number(params.corte_semana) : tarjeta.corte_semana,
+      corte_dia_semana: params.corte_dia_semana !== undefined ? Number(params.corte_dia_semana) : tarjeta.corte_dia_semana,
+      estado: "activo",
+      version_consecutivo: nuevaVersion,
+      version_padre_id: padreId,
+      version_anterior_id: tarjetaId,
+      operacion: "reemplazo",
+      operacion_fecha: now,
+      operacion_detalle: `Reemplazo de plástico. Anterior: ${tarjeta.nombre} (${tarjeta.nomenclatura})`
+    });
+
+    return { success: true, tarjeta_anterior: tarjeta, tarjeta_nueva: nueva, tarjeta: nueva };
   }
+
+  if (op === "unificacion") {
+    const { tarjeta_origen_id, tarjeta_destino_id } = params;
+    const origen = await entities.ProductoCredito.get(tarjeta_origen_id);
+    const destino = await entities.ProductoCredito.get(tarjeta_destino_id);
+    if (!origen || !destino) throw new Error("Tarjetas no encontradas para unificación");
+
+    const nuevoCupo = (Number(destino.cupo) || 0) + (Number(origen.cupo) || 0);
+    const nuevoSaldo = (Number(destino.saldo) || 0) + (Number(origen.saldo) || 0);
+    const now = new Date().toISOString();
+
+    await entities.ProductoCredito.update(destino.id, {
+      cupo: nuevoCupo,
+      saldo: nuevoSaldo,
+      operacion_detalle: `Unificada con ${origen.nombre} el ${now.substring(0, 10)}`
+    });
+
+    await entities.ProductoCredito.update(origen.id, {
+      estado: "inactivo",
+      cupo: 0,
+      saldo: 0,
+      operacion_detalle: `Inhabilitada por unificación en ${destino.nombre} el ${now.substring(0, 10)}`
+    });
+
+    return { success: true, tarjeta_destino: destino, tarjeta_origen: origen };
+  }
+
+  if (op === "aumentoCupo") {
+    const prodId = params.producto_credito_id || params.id;
+    const nuevoCupo = Number(params.nuevo_cupo ?? params.cupo_total ?? params.cupo) || 0;
+    const updated = await entities.ProductoCredito.update(prodId, {
+      cupo: nuevoCupo
+    });
+    return { success: true, producto: updated, tarjeta: updated };
+  }
+
   return { success: true, ...params };
 }
 
 export async function gestionarCuentaAhorro(entities, payload = {}) {
-  const { operacion, ...params } = payload;
-  if (operacion === "crear") {
-    const cda = await entities.CuentaAhorro.create(params);
-    return { success: true, cuentaAhorro: cda };
+  const { operacion, accion, ...params } = payload;
+  const op = operacion || accion;
+
+  if (op === "crear") {
+    const { banco, titular_id, numero_completo, nombre, saldo, nota, subcuenta_puc, ...extra } = params;
+
+    if (!banco || !titular_id) {
+      throw new Error("Banco y titular son obligatorios");
+    }
+    if (!numero_completo || !String(numero_completo).trim()) {
+      throw new Error("El número de cuenta es obligatorio");
+    }
+
+    const dRef = String(numero_completo).replace(/\D/g, "").slice(-4);
+    const nombreFinal = nombre || `CDA - ${dRef}`;
+
+    // Auto-crear cuenta PUC bajo 1110 (Bancos) con jerarquía si no viene asignada
+    let finalSubcuentaPuc = subcuenta_puc;
+    if (!finalSubcuentaPuc) {
+      finalSubcuentaPuc = await crearCuentaPUCProducto(entities, {
+        categoriaProducto: "CDA",
+        tipo: "CDA",
+        banco,
+        nombre: nombreFinal
+      });
+    }
+
+    const dataToCreate = {
+      ...extra,
+      nombre: nombreFinal,
+      numero_completo: String(numero_completo).trim(),
+      banco,
+      subcuenta_puc: String(finalSubcuentaPuc),
+      titular_id,
+      saldo: Number(saldo) || 0,
+      estado: params.estado || "activa",
+      movimientos_mes_acumulado: Number(params.movimientos_mes_acumulado) || 0,
+      nota: String(nota || "").trim()
+    };
+
+    const cda = await entities.CuentaAhorro.create(dataToCreate);
+    return { success: true, cuentaAhorro: cda, cuenta: cda, subcuenta_puc: finalSubcuentaPuc };
   }
+
+  if (op === "editar" || op === "actualizar") {
+    const cdaId = params.id || params.cuenta_id;
+    const updated = await entities.CuentaAhorro.update(cdaId, params);
+    // Sincronizar concepto en el PUC si cambió de nombre
+    if (params.nombre && updated?.subcuenta_puc) {
+      const cuentas = await entities.Cuenta.filter({ codigo: Number(updated.subcuenta_puc) });
+      if (cuentas.length > 0) {
+        await entities.Cuenta.update(cuentas[0].id, { concepto: params.nombre.trim() });
+      }
+    }
+    return { success: true, cuentaAhorro: updated, cuenta: updated };
+  }
+
   return { success: true, ...params };
 }
 
 export async function gestionarCuentaPUC(entities, payload = {}) {
   const { operacion, accion, ...params } = payload;
   const op = operacion || accion;
+
   if (op === "crear") {
-    const cuenta = await entities.Cuenta.create(params);
-    return { success: true, cuenta };
+    const { nivel, parent_codigo, concepto, naturaleza, tipo_estado, es_transaccional, codigo } = params;
+
+    if (codigo) {
+      const cuenta = await entities.Cuenta.create(params);
+      return { success: true, cuenta };
+    }
+
+    if (!nivel) throw new Error("Nivel es obligatorio");
+    if (!concepto || !concepto.trim()) throw new Error("Concepto es obligatorio");
+
+    const todas = await entities.Cuenta.list("-codigo", 2000);
+    const nextCod = calcularNextCodigo(nivel, parent_codigo, todas);
+    if (!nextCod) throw new Error("No hay códigos disponibles bajo la cuenta padre seleccionada");
+
+    const s = String(nextCod);
+    const comps = {
+      clase: Number(s[0]),
+      grupo: s.length >= 2 ? Number(s.slice(0, 2)) : null,
+      cuenta: s.length >= 4 ? Number(s.slice(0, 4)) : null,
+      subcuenta: s.length >= 6 ? Number(s.slice(0, 6)) : null,
+      auxiliar: s.length >= 8 ? (nextCod - Number(s.slice(0, 6)) * 100) : null
+    };
+
+    const nuevaCuenta = await entities.Cuenta.create({
+      codigo: nextCod,
+      nivel,
+      clase: comps.clase,
+      clase_nombre: getClaseNombre(comps.clase),
+      grupo: comps.grupo,
+      cuenta: comps.cuenta,
+      subcuenta: comps.subcuenta,
+      auxiliar: comps.auxiliar,
+      concepto: concepto.trim(),
+      naturaleza: naturaleza || "Débito",
+      tipo_estado: tipo_estado || "Balance",
+      es_transaccional: !!es_transaccional
+    });
+
+    return { success: true, cuenta: nuevaCuenta };
   }
-  if (op === "editar") {
+
+  if (op === "editar" || op === "actualizar") {
     const updated = await entities.Cuenta.update(params.id, params);
     return { success: true, cuenta: updated };
   }
+
+  if (op === "eliminar") {
+    if (!params.id) throw new Error("ID es obligatorio para eliminar");
+    await entities.Cuenta.delete(params.id);
+    return { success: true };
+  }
+
   return { success: true, ...params };
 }
 

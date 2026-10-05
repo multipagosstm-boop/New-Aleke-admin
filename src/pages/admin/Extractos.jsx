@@ -3,8 +3,9 @@ import { base44 } from "@/api/base44Client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Clock, DollarSign, CheckCircle2, Printer, FileText, FileUp, ChevronLeft, ChevronRight, Search, CalendarClock, ArrowUp, ArrowDown, ArrowUpDown, RefreshCw, SkipForward, RotateCcw, Trash2, Gift } from "lucide-react";
+import { Clock, DollarSign, CheckCircle2, Printer, FileText, FileUp, ChevronLeft, ChevronRight, Search, CalendarClock, ArrowUp, ArrowDown, ArrowUpDown, RefreshCw, SkipForward, RotateCcw, Trash2, Gift, Calendar, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -46,6 +47,15 @@ export default function Extractos() {
     type: null, // "omitir" | "reactivar" | "reversar" | "eliminar" | "aplicar_favor"
     extracto: null,
     loading: false,
+  });
+  const [periodoDialog, setPeriodoDialog] = useState({
+    open: false,
+    extracto: null,
+    nuevoPeriodo: "",
+    nuevaFechaCorte: "",
+    nuevaFechaPago: "",
+    loading: false,
+    error: "",
   });
 
   const normalize = (s) => (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -253,6 +263,78 @@ export default function Extractos() {
       extracto: ext,
       loading: false,
     });
+  };
+
+  const handleCambiarPeriodo = (ext) => {
+    setPeriodoDialog({
+      open: true,
+      extracto: ext,
+      nuevoPeriodo: ext.periodo || "",
+      nuevaFechaCorte: ext.fecha_corte || "",
+      nuevaFechaPago: ext.fecha_pago || "",
+      loading: false,
+      error: "",
+    });
+  };
+
+  const handleGuardarNuevoPeriodo = async () => {
+    const ext = periodoDialog.extracto;
+    const nuevoPeriodo = periodoDialog.nuevoPeriodo?.trim();
+    if (!ext || !nuevoPeriodo) {
+      setPeriodoDialog((prev) => ({ ...prev, error: "Debes seleccionar un período válido (formato AAAA-MM)." }));
+      return;
+    }
+
+    if (!/^\d{4}-\d{2}$/.test(nuevoPeriodo)) {
+      setPeriodoDialog((prev) => ({ ...prev, error: "El formato del período debe ser AAAA-MM (ej. 2026-10)." }));
+      return;
+    }
+
+    if (
+      nuevoPeriodo === ext.periodo &&
+      (!periodoDialog.nuevaFechaCorte || periodoDialog.nuevaFechaCorte === ext.fecha_corte) &&
+      (!periodoDialog.nuevaFechaPago || periodoDialog.nuevaFechaPago === ext.fecha_pago)
+    ) {
+      setPeriodoDialog({ open: false, extracto: null, nuevoPeriodo: "", nuevaFechaCorte: "", nuevaFechaPago: "", loading: false, error: "" });
+      return;
+    }
+
+    // Verificar si ya existe otro extracto para este producto en el nuevo período
+    const yaExiste = extractos.some(
+      (e) => e.id !== ext.id && e.producto_id === ext.producto_id && e.periodo === nuevoPeriodo
+    );
+
+    if (yaExiste) {
+      const prodNom = productoMap[ext.producto_id]?.nombre || "este producto";
+      setPeriodoDialog((prev) => ({
+        ...prev,
+        error: `Ya existe un extracto para el período ${nuevoPeriodo} en ${prodNom}. Debes eliminarlo primero o elegir otro período diferente.`
+      }));
+      return;
+    }
+
+    setPeriodoDialog((prev) => ({ ...prev, loading: true, error: "" }));
+
+    try {
+      const updateData = {
+        periodo: nuevoPeriodo
+      };
+      if (periodoDialog.nuevaFechaCorte) updateData.fecha_corte = periodoDialog.nuevaFechaCorte;
+      if (periodoDialog.nuevaFechaPago) updateData.fecha_pago = periodoDialog.nuevaFechaPago;
+
+      await base44.entities.ExtractoProducto.update(ext.id, updateData);
+
+      setExtractos((prev) =>
+        prev.map((item) => (item.id === ext.id ? { ...item, ...updateData } : item))
+      );
+
+      toast.success(`Período del extracto actualizado a ${nuevoPeriodo} correctamente.`);
+      setPeriodoDialog({ open: false, extracto: null, nuevoPeriodo: "", nuevaFechaCorte: "", nuevaFechaPago: "", loading: false, error: "" });
+      await loadData(false);
+    } catch (err) {
+      console.error("Error al actualizar período:", err);
+      setPeriodoDialog((prev) => ({ ...prev, loading: false, error: err.message || "Error al actualizar el período." }));
+    }
   };
 
   const handleConfirmAction = async () => {
@@ -626,6 +708,7 @@ export default function Extractos() {
               onDelete={handleDeleteExtracto}
               onOmitirPago={handleOmitirPago}
               onReactivarPago={handleReactivarPago}
+              onCambiarPeriodo={handleCambiarPeriodo}
               recalcLoading={recalcLoadingId === e.id}
             />
           ))}
@@ -652,6 +735,7 @@ export default function Extractos() {
               onDelete={handleDeleteExtracto}
               onOmitirPago={handleOmitirPago}
               onReactivarPago={handleReactivarPago}
+              onCambiarPeriodo={handleCambiarPeriodo}
               recalcLoading={recalcLoadingId === e.id}
             />
           ))}
@@ -847,6 +931,123 @@ export default function Extractos() {
               {confirmDialog.type === "reversar" && "Confirmar Reversión"}
               {confirmDialog.type === "eliminar" && "Eliminar Extracto"}
               {confirmDialog.type === "aplicar_favor" && "Aplicar Saldo"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Diálogo para Cambiar Período del Extracto */}
+      <Dialog
+        open={periodoDialog.open}
+        onOpenChange={(v) => {
+          if (!v && !periodoDialog.loading) {
+            setPeriodoDialog({ open: false, extracto: null, nuevoPeriodo: "", nuevaFechaCorte: "", nuevaFechaPago: "", loading: false, error: "" });
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Calendar className="w-5 h-5 text-primary shrink-0" />
+              <span>Cambiar período del extracto</span>
+            </DialogTitle>
+            <DialogDescription className="text-sm pt-1">
+              Modifica el período asignado a este extracto si hubo un error al registrarlo, sin necesidad de repetir todo el proceso de carga.
+            </DialogDescription>
+          </DialogHeader>
+
+          {periodoDialog.error && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{periodoDialog.error}</span>
+            </div>
+          )}
+
+          {periodoDialog.extracto && (
+            <div className="space-y-3 py-1">
+              <div className="bg-muted/50 rounded-lg p-3 text-xs space-y-1.5 border">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Producto:</span>
+                  <span className="font-semibold text-foreground">
+                    {productoMap[periodoDialog.extracto.producto_id]?.nombre || "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Período actual:</span>
+                  <span className="font-bold font-mono text-foreground">{periodoDialog.extracto.periodo}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Saldo a pagar:</span>
+                  <span className="font-semibold font-mono text-foreground">
+                    {formatCOP(periodoDialog.extracto.saldo_a_pagar)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="nuevo-periodo" className="text-xs font-medium">
+                  Nuevo período (Mes/Año) *
+                </Label>
+                <Input
+                  id="nuevo-periodo"
+                  type="month"
+                  value={periodoDialog.nuevoPeriodo}
+                  onChange={(e) => setPeriodoDialog((prev) => ({ ...prev, nuevoPeriodo: e.target.value, error: "" }))}
+                  className="font-mono h-9"
+                  disabled={periodoDialog.loading}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Selecciona el mes y año real al que corresponde este extracto.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <div className="space-y-1">
+                  <Label htmlFor="fecha-corte" className="text-[11px] text-muted-foreground">
+                    Fecha corte (opcional)
+                  </Label>
+                  <Input
+                    id="fecha-corte"
+                    type="date"
+                    value={periodoDialog.nuevaFechaCorte}
+                    onChange={(e) => setPeriodoDialog((prev) => ({ ...prev, nuevaFechaCorte: e.target.value }))}
+                    className="font-mono text-xs h-8"
+                    disabled={periodoDialog.loading}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="fecha-pago" className="text-[11px] text-muted-foreground">
+                    Fecha límite pago (opcional)
+                  </Label>
+                  <Input
+                    id="fecha-pago"
+                    type="date"
+                    value={periodoDialog.nuevaFechaPago}
+                    onChange={(e) => setPeriodoDialog((prev) => ({ ...prev, nuevaFechaPago: e.target.value }))}
+                    className="font-mono text-xs h-8"
+                    disabled={periodoDialog.loading}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0 mt-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPeriodoDialog({ open: false, extracto: null, nuevoPeriodo: "", nuevaFechaCorte: "", nuevaFechaPago: "", loading: false, error: "" })}
+              disabled={periodoDialog.loading}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={handleGuardarNuevoPeriodo}
+              disabled={periodoDialog.loading || !periodoDialog.nuevoPeriodo}
+            >
+              {periodoDialog.loading && <RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin" />}
+              Guardar Período
             </Button>
           </DialogFooter>
         </DialogContent>

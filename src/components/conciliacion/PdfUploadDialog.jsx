@@ -159,7 +159,13 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
     setError("");
     try {
       // 1. Subir el PDF
-      await base44.integrations.Core.UploadFile({ file });
+      let fileUrl = "";
+      try {
+        const uploadRes = await base44.integrations.Core.UploadFile({ file });
+        fileUrl = uploadRes?.file_url || "";
+      } catch (upErr) {
+        console.warn("No se pudo subir a storage, continuando con base64:", upErr);
+      }
 
       // Convertir el archivo a base64 para análisis directo con IA multimodal
       let fileBase64 = "";
@@ -182,7 +188,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
       setStatusMsg("Analizando extracto con IA multimodal…");
       const resp = await base44.functions.invoke("procesarExtractoPDF", {
         action: "extraer",
-        file_url: url,
+        file_url: fileUrl,
         file_base64: fileBase64,
         file_name: file.name,
         onStatusUpdate: (info) => {

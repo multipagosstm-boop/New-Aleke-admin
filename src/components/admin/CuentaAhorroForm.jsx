@@ -18,10 +18,12 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
   const [nota, setNota] = useState("");
   const [saldoInicial, setSaldoInicial] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [cuentasExistentes, setCuentasExistentes] = useState([]);
 
   useEffect(() => {
     if (open) {
+      setError("");
       base44.entities.CuentaAhorro.list().then(setCuentasExistentes).catch(() => {});
     }
   }, [open]);
@@ -35,6 +37,7 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
   })();
 
   useEffect(() => {
+    setError("");
     if (editing) {
       setNumeroCompleto(editing.numero_completo || "");
       setBanco(editing.banco || "");
@@ -51,18 +54,19 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
 
   const handleSubmit = async () => {
     if (!numeroCompleto.trim() || !banco || !titularId) {
-      alert("Complete todos los campos obligatorios");
+      setError("Complete todos los campos obligatorios");
       return;
     }
     if (editing && !subcuentaPuc) {
-      alert("La cuenta contable (PUC) es obligatoria");
+      setError("La cuenta contable (PUC) es obligatoria");
       return;
     }
     if (duplicado) {
-      alert(`Ya existe una cuenta de ahorro con ese número: ${duplicado.nombre}. Edita o elimina la existente.`);
+      setError(`Ya existe una cuenta de ahorro con ese número: ${duplicado.nombre}. Edita o elimina la existente.`);
       return;
     }
     setSaving(true);
+    setError("");
     try {
       if (editing) {
         await base44.entities.CuentaAhorro.update(editing.id, {
@@ -90,7 +94,7 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
       onOpenChange(false);
     } catch (e) {
       const msg = e?.response?.data?.error || e.message;
-      alert("Error: " + msg);
+      setError(msg);
     }
     setSaving(false);
   };
@@ -171,6 +175,7 @@ export default function CuentaAhorroForm({ open, onOpenChange, onSaved, editing,
             <Label>Nota</Label>
             <Textarea value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Observaciones (opcional)" rows={2} />
           </div>
+          {error && <div className="text-sm text-destructive">{error}</div>}
         </div>
         <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end w-full sm:w-auto mt-4">
           <Button variant="outline" className="w-full sm:w-auto" onClick={() => onOpenChange(false)}>Cancelar</Button>
