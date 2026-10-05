@@ -87,6 +87,7 @@ export const SUBCUENTAS_GASTOS_FINANCIEROS = {
   seguros: "510505",
   comisiones: "510506",
   otros_gastos: "510507",
+  valor_cobertura: "510502",
 };
 export const SUBCUENTA_GASTO_GENERICA = "510502";
 
@@ -95,13 +96,16 @@ export function categorizarCargo(descripcion) {
   if (d.includes("cuota de manejo") || d.includes("cuota manejo") || d.includes("manejo tarj") ||
       d.includes("manejo") || d.includes("membresia") || d.includes("membresía"))
     return "cuota_manejo";
+  if (d.includes("cobertura") || d.includes("frech") || d.includes("subsidio tasa") || d.includes("alivio tasa") || d.includes("cob. tasa"))
+    return "valor_cobertura";
   if (d.includes("seguro") || d.includes("seg deud") || d.includes("seg deu") || d.includes("seg.") ||
       d.includes("seg ") || d.includes("deudores") || d.includes("deudor") || d.includes("amparo") ||
-      d.includes("poliza") || d.includes("póliza") || d.includes("proteccion") || d.includes("protección"))
+      d.includes("poliza") || d.includes("póliza") || d.includes("proteccion") || d.includes("protección") ||
+      d.includes("incendio") || d.includes("terremoto") || d.includes("vida"))
     return "seguros";
   if (d.includes("mora"))
     return "intereses_mora";
-  if (d.includes("interes") || d.includes("interés") || d.includes("financiac"))
+  if (d.includes("interes") || d.includes("interés") || d.includes("financiac") || d.includes("int.") || d.includes("int "))
     return "intereses_corrientes";
   if (d.includes("cashback") || d.includes("cash back"))
     return "cashback";
@@ -200,7 +204,12 @@ export function esLineaSubtotal(descripcion) {
   const patrones = [
     "consumos del mes facturados", "total compras", "total avances", "total abonos",
     "total cargos", "subtotal", "suma total", "total del periodo", "saldo anterior",
-    "saldo en pesos", "nuevo saldo", "saldo a favor", "total financiaciones"
+    "saldo en pesos", "nuevo saldo", "saldo a favor", "total financiaciones",
+    // Encabezado y desglose de valores aplicados en créditos hipotecarios (DEBEN IGNORARSE)
+    "valores aplicados", "valores aplicados en el periodo", "valores aplicados en el período",
+    "valores aplicados a su credito", "valores aplicados a su crédito",
+    "aplicacion de valores", "aplicación de valores", "distribucion del pago", "distribución del pago",
+    "abono a capital aplicado", "interes corriente aplicado", "intereses corrientes aplicados"
   ];
   return patrones.some((p) => d.includes(p));
 }
@@ -236,8 +245,13 @@ export async function extraerDatosExtractoConIA({ fileBase64, fileName = "extrac
 
   const ai = new GoogleGenAI({ apiKey });
 
-  const prompt = `Eres un auditor contable experto en extractos bancarios colombianos (Tarjetas de crédito y cuentas).
+  const prompt = `Eres un auditor contable experto en extractos bancarios colombianos (Tarjetas de crédito, cuentas y Créditos Hipotecarios / Comerciales).
 Analiza el documento PDF adjunto (${fileName}) y extrae los datos del extracto con precisión quirúrgica.
+
+TIPO DE PRODUCTO:
+- Determina si el documento corresponde a un CRÉDITO HIPOTECARIO (CH), CRÉDITO DE LIBRE DESTINO (LIB), CRÉDITO ROTATIVO (CR) o TARJETA DE CRÉDITO (TDC).
+- Si es crédito hipotecario, asigna tipo_producto: "CH" y es_credito: true.
+- Si es tarjeta de crédito, asigna tipo_producto: "TDC" y es_credito: false.
 
 REGLAS OBLIGATORIAS DE NÚMEROS Y MONEDA (COP - PESOS COLOMBIANOS):
 1. En Colombia, el punto (.) es separador de miles y la coma (,) es separador decimal (ej: "$ 1.250.000,50" son 1250000.5 pesos; "$ 31.458,39" son 31458.39 pesos; "$ 50.960" son 50960 pesos).
@@ -245,7 +259,22 @@ REGLAS OBLIGATORIAS DE NÚMEROS Y MONEDA (COP - PESOS COLOMBIANOS):
 3. Si un valor no tiene centavos, devuélvelo como entero (ej: 1841920). Si tiene centavos, redondea a máximo 2 o 3 decimales (ej: 31458.39).
 4. Todos los montos deben ser devueltos como números estándar en JSON (no strings con símbolos de moneda ni comas).
 
-REGLAS DE MOVIMIENTOS:
+PARÁMETROS OBLIGATORIOS PARA CRÉDITOS HIPOTECARIOS (CH):
+1. MOVIMIENTOS REGISTRADOS EN EL PERÍODO:
+   - Los movimientos reales ocurridos en el período aparecen bajo el encabezado "MOVIMIENTOS REGISTRADOS EN SU CRÉDITO DURANTE EL PERÍODO" (o "Movimientos registrados en su crédito"). Extrae exclusivamente las transacciones individuales que estén en esta sección (ej. pagos de cuota, abonos a capital, desembolsos).
+   - REGLA MANDATORIA DE EXCLUSIÓN: IGNORAR COMPLETAMENTE los campos bajo el encabezado "VALORES APLICADOS EN EL PERÍODO" (o "Valores aplicados a su crédito en el período", "Aplicación de valores / cuota"). Esta sección es ÚNICAMENTE un resumen explicativo de cómo derivó o se distribuyó el abono aplicado (capital, intereses, seguros) y NO son transacciones independientes. Extraerlos causaría duplicidad con el abono del movimiento y con los gastos.
+2. GASTOS DEL PERÍODO Y NUEVO SALDO:
+   - Los gastos del período aparecen al final bajo el encabezado "NUEVO SALDO DE SU CRÉDITO HIPOTECARIO" (o "Detalle del nuevo saldo", "Liquidación de su crédito").
+   - De dicha sección debes extraer a los campos específicos y a "resumen_cargos":
+     * intereses_corrientes: Monto de intereses corrientes liquidados en el período.
+     * intereses_mora: Intereses de mora liquidados (0 si no aplica).
+     * seguros: Seguros liquidados del período (seguro de vida/deudores, seguro de incendio/terremoto).
+     * valor_cobertura: Monto de la cobertura (cobertura FRECH / subsidio de tasa del gobierno). Ten en cuenta que por lo general es un "ingreso" o alivio que descuenta a los intereses generados. Regístralo en resumen_cargos como concepto "Valor cobertura" (naturaleza: "ingreso" o "descuento_interes").
+     * saldo_capital: Saldo capital pendiente que aparece en esta sección.
+     * valor_cuota: Valor de la cuota mensual a pagar.
+     * numero_obligacion: Número de la obligación / crédito hipotecario.
+
+REGLAS PARA TARJETAS DE CRÉDITO (TDC):
 - Extrae todos los movimientos individuales reales del período: compras, avances, pagos/abonos.
 - Excluye líneas de subtotales o resúmenes ("Total compras", "Consumos del mes").
 - Excluye compras a cuotas donde la cuota sea 2 o superior (ej: "2/36", "5/12"). Solo incluye compras nuevas del mes o primera cuota (1/36).
@@ -255,8 +284,11 @@ REGLAS DE MOVIMIENTOS:
 Devuelve UNICAMENTE un objeto JSON válido con este esquema:
 {
   "banco": "Nombre del banco (Bancolombia, BBVA, Bogotá, Davivienda, etc.)",
-  "numero_tarjeta": "Número completo o enmascarado del producto o tarjeta (ej: XXXX-XXXX-XXXX-5513, ****-5513, o últimos dígitos visibles)",
-  "ultimos_4_digitos": "Últimos 4 dígitos del producto o tarjeta (ej: 5513)",
+  "tipo_producto": "CH | LIB | CR | TDC",
+  "es_credito": true,
+  "numero_obligacion": "Número de obligación o crédito si aplica (ej: CH-123456 o 5711113200014298)",
+  "numero_tarjeta": "Número completo o enmascarado del producto o tarjeta si es TDC",
+  "ultimos_4_digitos": "Últimos 4 dígitos del producto o tarjeta",
   "titular": "Nombre completo del titular",
   "periodo": "YYYY-MM del extracto (ej: 2026-09)",
   "fecha_corte": "YYYY-MM-DD",
@@ -265,21 +297,28 @@ Devuelve UNICAMENTE un objeto JSON válido con este esquema:
   "saldo_anterior": 0.0,
   "saldo_a_pagar": 0.0,
   "pago_minimo": 0.0,
+  "saldo_capital": 0.0,
+  "valor_cuota": 0.0,
   "cupo_total": 0.0,
   "cupo_disponible": 0.0,
+  "intereses_corrientes": 0.0,
+  "intereses_mora": 0.0,
+  "seguros": 0.0,
+  "valor_cobertura": 0.0,
   "movimientos": [
     {
       "fecha": "YYYY-MM-DD",
-      "descripcion": "Descripción del comercio o transacción",
+      "descripcion": "Descripción del movimiento (extraído exclusivamente de 'MOVIMIENTOS REGISTRADOS EN SU CRÉDITO DURANTE EL PERÍODO' si es crédito hipotecario)",
       "valor": 0.0,
-      "tipo": "compra | abono | avance | financiero | ajuste"
+      "tipo": "abono | compra | avance | financiero | ajuste"
     }
   ],
   "resumen_cargos": [
     {
-      "concepto": "Nombre del cargo (cuota de manejo, seguro, interés, etc.)",
+      "concepto": "Nombre del cargo o gasto (intereses corrientes, intereses mora, seguros, valor cobertura, cuota de manejo, etc.)",
       "valor": 0.0,
-      "fecha": "YYYY-MM-DD o vacío"
+      "fecha": "YYYY-MM-DD o vacío",
+      "naturaleza": "cargo | ingreso | descuento_interes"
     }
   ]
 }`;

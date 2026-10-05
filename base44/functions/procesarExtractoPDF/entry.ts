@@ -481,6 +481,37 @@ Extrae TODOS los movimientos individuales del período (abonos, intereses, segur
     };
   }).filter((m) => m.valor > 0 && !esLineaSubtotalCredito(m.descripcion));
 
+  const cargosCategorizados = {
+    cuota_manejo: 0,
+    seguros: Number(data.seguros) || 0,
+    intereses_corrientes: Number(data.intereses_corrientes) || 0,
+    intereses_mora: Number(data.intereses_mora) || 0,
+    comisiones: 0,
+    otros_gastos: 0,
+    rendimientos: Number(data.valor_cobertura) || 0,
+    cashback: 0,
+    valor_cobertura: Number(data.valor_cobertura) || 0
+  };
+
+  (data.resumen_cargos || []).forEach((c) => {
+    const d = (c.concepto || "").toLowerCase();
+    const val = Math.abs(Number(c.valor) || 0);
+    if (d.includes("cobertura") || d.includes("frech") || d.includes("subsidio tasa")) cargosCategorizados.valor_cobertura = val;
+    else if (d.includes("seguro") || d.includes("vida") || d.includes("incendio") || d.includes("terremoto")) cargosCategorizados.seguros = val;
+    else if (d.includes("mora")) cargosCategorizados.intereses_mora = val;
+    else if (d.includes("interes") || d.includes("interés")) cargosCategorizados.intereses_corrientes = val;
+  });
+
+  if (cargosCategorizados.valor_cobertura > 0 && !movimientos.some((l) => l.descripcion.toLowerCase().includes("cobertura"))) {
+    movimientos.push({
+      fecha: fechaCorte,
+      descripcion: "Valor cobertura (subsidio tasa / descuento intereses)",
+      valor: cargosCategorizados.valor_cobertura,
+      tipo: "cobertura",
+      naturaleza: "abono"
+    });
+  }
+
   // Matching por número de obligación contra productos de crédito activos
   const productos = await base44.asServiceRole.entities.ProductoCredito.list();
   const productosCreditoActivos = productos.filter((p) =>
@@ -514,6 +545,8 @@ Extrae TODOS los movimientos individuales del período (abonos, intereses, segur
     saldo_a_pagar: Number(data.saldo_a_pagar) || 0,
     saldo_capital: Number(data.saldo_capital) || 0,
     valor_cuota: Number(data.valor_cuota) || 0,
+    valor_cobertura: cargosCategorizados.valor_cobertura,
+    cargos_categorizados: cargosCategorizados,
     lineas: movimientos,
     total_cargos: movimientos.filter((l) => l.naturaleza === "cargo").reduce((s, l) => s + l.valor, 0),
     total_abonos: movimientos.filter((l) => l.naturaleza === "abono").reduce((s, l) => s + l.valor, 0),

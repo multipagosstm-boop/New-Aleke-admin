@@ -507,6 +507,53 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
             </div>
 
             {/* Cargos financieros — destino de cada cargo (solo TDC; los créditos no se contabilizan en esta fase) */}
+            {/* Gastos del período de Crédito Hipotecario (del encabezado "Nuevo saldo de su crédito hipotecario") */}
+            {esCredito && extracted.cargos_categorizados && (
+              <div className="rounded-md border p-3 space-y-2 bg-muted/10">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-foreground">
+                    Gastos del período (Nuevo saldo de su crédito hipotecario)
+                  </Label>
+                  <span className="text-[10px] text-muted-foreground font-mono">
+                    Parámetros OCR Crédito Hipotecario
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+                  <div className="rounded bg-muted/40 p-2 border">
+                    <div className="text-muted-foreground text-[11px]">Intereses corrientes</div>
+                    <div className="font-mono font-bold text-foreground">
+                      {formatCOP(extracted.cargos_categorizados.intereses_corrientes || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 border">
+                    <div className="text-muted-foreground text-[11px]">Intereses de mora</div>
+                    <div className="font-mono font-bold text-foreground">
+                      {formatCOP(extracted.cargos_categorizados.intereses_mora || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded bg-muted/40 p-2 border">
+                    <div className="text-muted-foreground text-[11px]">Seguros</div>
+                    <div className="font-mono font-bold text-foreground">
+                      {formatCOP(extracted.cargos_categorizados.seguros || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded bg-emerald-50 dark:bg-emerald-950/30 p-2 border border-emerald-200 dark:border-emerald-800">
+                    <div className="text-emerald-700 dark:text-emerald-400 text-[11px] font-medium flex items-center justify-between">
+                      <span>Valor cobertura</span>
+                      <span className="text-[9px] bg-emerald-100 dark:bg-emerald-900/60 px-1 rounded">Ingreso</span>
+                    </div>
+                    <div className="font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                      {formatCOP(extracted.cargos_categorizados.valor_cobertura || extracted.valor_cobertura || 0)}
+                    </div>
+                    <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 leading-tight mt-0.5">
+                      Descuenta a intereses
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Cargos financieros — destino de cada cargo (TDC) */}
             {!esCredito && extracted.cargos_categorizados && (
               <div className="rounded-md border p-3 space-y-2">
                 <Label className="text-xs text-muted-foreground">Cargos financieros — destino de cada cargo</Label>
@@ -591,7 +638,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
             {/* Movements preview */}
             <div>
               <Label className="text-xs text-muted-foreground">
-                Movimientos extraídos ({extracted.lineas?.length || 0})
+                {esCredito ? "Movimientos registrados en su crédito durante el período" : "Movimientos extraídos"} ({extracted.lineas?.length || 0})
               </Label>
               <div className="max-h-[280px] overflow-y-auto rounded-md border">
                 <table className="w-full text-xs">

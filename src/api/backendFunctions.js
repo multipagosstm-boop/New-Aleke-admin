@@ -16,6 +16,7 @@ import {
   estimarInteresesMesVencido
 } from "../lib/pakredito";
 import { calcularNextCodigo, getClaseNombre } from "../lib/cuentasPuc";
+import { formatCOP } from "../lib/contabilidad";
 
 export async function calcularTotales(entities, payload = {}) {
   const { periodo = null } = payload || {};
@@ -3374,7 +3375,8 @@ export async function procesarExtractoPDF(entities, payload = {}) {
       comisiones: 0, comisiones_fecha: "",
       otros_gastos: 0, otros_gastos_fecha: "",
       rendimientos: 0, rendimientos_fecha: "",
-      cashback: 0, cashback_fecha: ""
+      cashback: 0, cashback_fecha: "",
+      valor_cobertura: 0, valor_cobertura_fecha: ""
     };
 
     for (const cf of cargosFinancieros) {
@@ -3385,9 +3387,51 @@ export async function procesarExtractoPDF(entities, payload = {}) {
       }
     }
 
+    // Si la IA devolvió campos directos de crédito hipotecario / nuevo saldo:
+    if (data.intereses_corrientes > 0 && !cargosCategorizados.intereses_corrientes) {
+      cargosCategorizados.intereses_corrientes = parseAndRoundCOP(data.intereses_corrientes, 2);
+      cargosCategorizados.intereses_corrientes_fecha = fechaCorte;
+    }
+    if (data.intereses_mora > 0 && !cargosCategorizados.intereses_mora) {
+      cargosCategorizados.intereses_mora = parseAndRoundCOP(data.intereses_mora, 2);
+      cargosCategorizados.intereses_mora_fecha = fechaCorte;
+    }
+    if (data.seguros > 0 && !cargosCategorizados.seguros) {
+      cargosCategorizados.seguros = parseAndRoundCOP(data.seguros, 2);
+      cargosCategorizados.seguros_fecha = fechaCorte;
+    }
+    if (data.valor_cobertura > 0 && !cargosCategorizados.valor_cobertura) {
+      cargosCategorizados.valor_cobertura = parseAndRoundCOP(data.valor_cobertura, 2);
+      cargosCategorizados.valor_cobertura_fecha = fechaCorte;
+    }
+
+    // Si hay valor cobertura, actúa como un ingreso que descuenta a los intereses generados
+    if (cargosCategorizados.valor_cobertura > 0) {
+      const yaEnLineas = todasLineas.some((l) => l.descripcion.toLowerCase().includes("cobertura"));
+      if (!yaEnLineas) {
+        todasLineas.push({
+          fecha: fechaCorte,
+          descripcion: "Valor cobertura (subsidio tasa / descuento intereses)",
+          valor: cargosCategorizados.valor_cobertura,
+          tipo: "financiero",
+          naturaleza: "abono",
+          subcuenta_gasto: "510502"
+        });
+      }
+    }
+
     // Match inteligente con productos de crédito y cuentas activas
     const productos = await entities.ProductoCredito.list();
     const productosActivos = (productos || []).filter((p) => p.estado === "activo");
+
+    const esCredito = !!(
+      data.es_credito ||
+      ["CH", "LIB", "CR"].includes(data.tipo_producto) ||
+      String(data.tipo_producto || "").toLowerCase().includes("hipotecari") ||
+      String(file_name || "").toLowerCase().includes("hipotecari") ||
+      (data.numero_obligacion && !data.numero_tarjeta)
+    );
+    const tipoProducto = data.tipo_producto || (esCredito ? "CH" : "TDC");
 
     let cuentasPuc = [];
     try {
@@ -3399,7 +3443,43 @@ export async function procesarExtractoPDF(entities, payload = {}) {
     let productoMatch = null;
     let matchReason = "";
 
-    if (last4) {
+    // 1. Si es crédito hipotecario / crédito, match prioritario por número de obligación
+    if (esCredito) {
+      const prodsCredito = productosActivos.filter((p) => ["CH", "LIB", "CR"].includes(p.tipo));
+      const numOblig = String(data.numero_obligacion || numTarjetaRaw || "").trim();
+      const oblNorm = numOblig.replace(/\D/g, "");
+
+      if (oblNorm && oblNorm.length >= 4) {
+        productoMatch = prodsCredito.find((p) => {
+          const pcNorm = String(p.numero_completo || "").replace(/\D/g, "");
+          const ciNorm = String(p.codigo_interno || "").replace(/\D/g, "");
+          return (
+            (pcNorm && (pcNorm === oblNorm || pcNorm.endsWith(oblNorm) || oblNorm.endsWith(pcNorm))) ||
+            (ciNorm && (ciNorm === oblNorm || ciNorm.endsWith(oblNorm) || oblNorm.endsWith(ciNorm)))
+          );
+        });
+        if (productoMatch) {
+          matchReason = `Crédito coincidente por obligación (${numOblig})`;
+        }
+      }
+
+      if (!productoMatch && last4) {
+        productoMatch = prodsCredito.find((p) => {
+          const pcNorm = String(p.numero_completo || "").replace(/\D/g, "");
+          const ciNorm = String(p.codigo_interno || "").replace(/\D/g, "");
+          return (
+            pcNorm.endsWith(last4) ||
+            ciNorm.endsWith(last4) ||
+            String(p.nombre || "").includes(last4)
+          );
+        });
+        if (productoMatch) {
+          matchReason = `Crédito coincidente por terminación ${last4}`;
+        }
+      }
+    }
+
+    if (!productoMatch && last4) {
       const regexLast4 = new RegExp(`(?:^|\\D)${last4}(?:\\D|$)`);
       const normCard = numTarjetaRaw.replace(/\D/g, "");
 
@@ -3415,14 +3495,16 @@ export async function procesarExtractoPDF(entities, payload = {}) {
         }
       }
 
-      // 2. Coincidencia directa por nombre canónico de cuenta/tarjeta (ej: "TDC - 5513", "TDC-5513", "TDC 5513")
+      // 2. Coincidencia directa por nombre canónico de cuenta/tarjeta (ej: "TDC - 5513", "TDC-5513", "TDC 5513", "CH - 4298")
       if (!productoMatch) {
         const porNombreCanonico = productosActivos.find((p) => {
           const pNom = String(p.nombre || "").trim().toLowerCase();
           return (
             pNom === `tdc - ${last4}`.toLowerCase() ||
             pNom === `tdc-${last4}`.toLowerCase() ||
-            pNom === `tdc ${last4}`.toLowerCase()
+            pNom === `tdc ${last4}`.toLowerCase() ||
+            pNom === `ch - ${last4}`.toLowerCase() ||
+            pNom === `ch-${last4}`.toLowerCase()
           );
         });
         if (porNombreCanonico) {
@@ -3462,11 +3544,11 @@ export async function procesarExtractoPDF(entities, payload = {}) {
         }
       }
 
-      // 5. Coincidencia a través de Cuenta contable PUC (ej: cuenta con concepto "TDC - 5513")
+      // 5. Coincidencia a través de Cuenta contable PUC (ej: cuenta con concepto "TDC - 5513" o "CH - 4298")
       if (!productoMatch && cuentasPuc.length > 0) {
         const cuentaPuc = cuentasPuc.find((c) =>
           regexLast4.test(c.concepto || "") ||
-          String(c.concepto || "").toLowerCase().includes(`tdc - ${last4}`.toLowerCase())
+          String(c.concepto || "").toLowerCase().includes(last4)
         );
         if (cuentaPuc) {
           const porPuc = productosActivos.find((p) =>
@@ -3491,10 +3573,13 @@ export async function procesarExtractoPDF(entities, payload = {}) {
 
     return {
       banco_detectado: banco,
+      tipo_producto: tipoProducto,
+      es_credito: esCredito,
+      numero_obligacion: data.numero_obligacion || numTarjetaRaw || "",
       cargos_categorizados: cargosCategorizados,
       tarjeta: numTarjetaRaw || (last4 ? `****${last4}` : "No identificada"),
       last4,
-      titular: data.titular || "Titular de tarjeta",
+      titular: data.titular || "Titular",
       periodo,
       fecha_corte: fechaCorte,
       fecha_corte_anterior: fechaCorteAnterior,
@@ -3502,6 +3587,9 @@ export async function procesarExtractoPDF(entities, payload = {}) {
       saldo_anterior: parseAndRoundCOP(data.saldo_anterior, 2),
       saldo_a_pagar: parseAndRoundCOP(data.saldo_a_pagar, 2),
       pago_minimo: parseAndRoundCOP(data.pago_minimo, 2),
+      saldo_capital: parseAndRoundCOP(data.saldo_capital, 2),
+      valor_cuota: parseAndRoundCOP(data.valor_cuota, 2),
+      valor_cobertura: parseAndRoundCOP(cargosCategorizados.valor_cobertura, 2),
       cupo_total: parseAndRoundCOP(data.cupo_total, 2),
       cupo_disponible: parseAndRoundCOP(data.cupo_disponible, 2),
       lineas: todasLineas,
@@ -3514,11 +3602,15 @@ export async function procesarExtractoPDF(entities, payload = {}) {
         nomenclatura: productoMatch.nomenclatura,
         match_reason: matchReason
       } : null,
-      productos_disponibles: productosActivos.map((p) => ({
+      productos_disponibles: (esCredito
+        ? productosActivos.filter((p) => ["CH", "LIB", "CR"].includes(p.tipo))
+        : productosActivos
+      ).map((p) => ({
         id: p.id,
         nombre: p.nombre,
         banco: p.banco,
-        nomenclatura: p.nomenclatura
+        nomenclatura: p.nomenclatura,
+        tipo: p.tipo
       }))
     };
   }
@@ -3553,6 +3645,11 @@ export async function procesarExtractoPDF(entities, payload = {}) {
     const sinDeuda = saldoFinal === 0;
     const today = new Date().toISOString().substring(0, 10);
 
+    let observacionesFinal = (observaciones || "").trim();
+    if (cargos_categorizados?.valor_cobertura > 0 && !observacionesFinal.toLowerCase().includes("cobertura")) {
+      observacionesFinal = (observacionesFinal + `\nValor cobertura aplicada (subsidio tasa / descuento intereses): ${formatCOP(cargos_categorizados.valor_cobertura)}`).trim();
+    }
+
     const camposFinancieros = {
       cuota_manejo: parseAndRoundCOP(cargos_categorizados.cuota_manejo, 2),
       cuota_manejo_fecha: cargos_categorizados.cuota_manejo_fecha || "",
@@ -3566,8 +3663,8 @@ export async function procesarExtractoPDF(entities, payload = {}) {
       comisiones_fecha: cargos_categorizados.comisiones_fecha || "",
       otros_gastos: parseAndRoundCOP(cargos_categorizados.otros_gastos, 2),
       otros_gastos_fecha: cargos_categorizados.otros_gastos_fecha || "",
-      rendimientos: parseAndRoundCOP(cargos_categorizados.rendimientos, 2),
-      rendimientos_fecha: cargos_categorizados.rendimientos_fecha || "",
+      rendimientos: parseAndRoundCOP((cargos_categorizados.rendimientos || 0) + (cargos_categorizados.valor_cobertura || 0), 2),
+      rendimientos_fecha: cargos_categorizados.rendimientos_fecha || (cargos_categorizados.valor_cobertura ? fecha_corte : ""),
       cashback: parseAndRoundCOP(cargos_categorizados.cashback, 2),
       cashback_fecha: cargos_categorizados.cashback_fecha || ""
     };
@@ -3580,7 +3677,7 @@ export async function procesarExtractoPDF(entities, payload = {}) {
       fecha_pago: fecha_pago || "",
       saldo_a_pagar: saldoFinal,
       saldo_anterior: saldoAnt,
-      observaciones: observaciones || "",
+      observaciones: observacionesFinal,
       ...camposFinancieros,
       estado: sinDeuda ? "pagado" : "pendiente_pago",
       estado_conciliacion: "sin_iniciar",
