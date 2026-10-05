@@ -263,10 +263,6 @@ export default function Conciliacion() {
     }
   };
 
-  const handleMarcarEnDisputa = async (lineaId) => {
-    await handleMarcarLineaBanco(lineaId, "marcar_en_disputa");
-  };
-
   const handleModificarSobrante = async (data) => {
     setSavingModificar(true);
     try {
@@ -1111,7 +1107,7 @@ export default function Conciliacion() {
                 try {
                   if (confirmActionModal.onConfirm) await confirmActionModal.onConfirm();
                   setConfirmActionModal(prev => ({ ...prev, open: false, loading: false }));
-                } catch (err) {
+                } catch {
                   setConfirmActionModal(prev => ({ ...prev, loading: false }));
                 }
               }}

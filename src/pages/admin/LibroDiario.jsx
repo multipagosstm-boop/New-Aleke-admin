@@ -29,7 +29,6 @@ export default function LibroDiario() {
   const [cuentasAhorro, setCuentasAhorro] = useState([]);
   const [productosCredito, setProductosCredito] = useState([]);
   const [pucTransaccional, setPucTransaccional] = useState([]);
-  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [expanded, setExpanded] = useState(null);
@@ -89,14 +88,13 @@ export default function LibroDiario() {
 
   const loadData = useCallback(async () => {
     try {
-      const [comps, movs, clients, cdas, prods, puc, me] = await Promise.all([
+      const [comps, movs, clients, cdas, prods, puc] = await Promise.all([
         base44.entities.ComprobanteContable.list("-fecha", 10000),
         base44.entities.MovimientoContable.list("-fecha", 35000),
         base44.entities.Cliente.list(),
         base44.entities.CuentaAhorro.list(),
         base44.entities.ProductoCredito.list(),
-        base44.entities.Cuenta.filter({ es_transaccional: true }, "codigo", 500),
-        base44.auth.me().catch(() => null)
+        base44.entities.Cuenta.filter({ es_transaccional: true }, "codigo", 500)
       ]);
       setComprobantes(comps || []);
       setMovimientos((movs || []).filter((m) => m.estado !== "inactivo"));
@@ -104,7 +102,6 @@ export default function LibroDiario() {
       setCuentasAhorro(cdas || []);
       setProductosCredito(prods || []);
       setPucTransaccional(puc || []);
-      setUser(me);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);

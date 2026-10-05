@@ -49,7 +49,7 @@ export default function DiferenciasPanel({
     return <div className="text-center py-12 text-muted-foreground text-sm">Ejecuta la comparación automática para ver las diferencias.</div>;
   }
 
-  const { conciliados = [], faltantes = [], sobrantes = [], diferencias = [], ignorados = [], disputados = [] } = comparacion;
+  const { conciliados = [], faltantes = [], sobrantes = [], diferencias = [], ignorados = [] } = comparacion;
   const cdasActivas = cdas.filter((c) => c.estado === "activa");
 
   const handleCrear = async () => {

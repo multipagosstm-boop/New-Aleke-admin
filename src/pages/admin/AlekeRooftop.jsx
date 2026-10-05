@@ -147,10 +147,6 @@ export default function AlekeRooftop() {
     }).sort((a, b) => (b.periodo || "").localeCompare(a.periodo || ""));
   }, [pagos, filtroPagoInmueble, filtroPagoEstado]);
 
-  const pagosPendientes = useMemo(() =>
-    pagos.filter((p) => p.estado === "pendiente" || p.estado === "en_mora" || p.estado === "parcial")
-      .sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento)), [pagos]);
-
   const inquilinosFiltrados = useMemo(() => {
     const q = busquedaInquilino.trim().toLowerCase();
     if (!q) return inquilinos;

@@ -9,7 +9,7 @@ const ESTADO_VARIANT = {
   vencida: "destructive"
 };
 
-export default function AmortizacionTable({ cuotas = [], modelo }) {
+export default function AmortizacionTable({ cuotas = [] }) {
   if (!cuotas.length) {
     return <p className="text-xs text-muted-foreground py-3">Sin cuotas registradas.</p>;
   }

@@ -36,7 +36,6 @@ const CARGOS_KEYS = [
 export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, productos }) {
   const [step, setStep] = useState("upload"); // upload | extracting | preview | confirming | done
   const [file, setFile] = useState(null);
-  const [fileUrl, setFileUrl] = useState("");
   const [extracted, setExtracted] = useState(null);
   const [productoSel, setProductoSel] = useState("");
   const [error, setError] = useState("");
@@ -124,7 +123,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
   }, [open, productoSel, periodoSel]);
 
   const reset = () => {
-    setStep("upload"); setFile(null); setFileUrl("");
+    setStep("upload"); setFile(null);
     setExtracted(null); setProductoSel(""); setError("");
     setObservaciones(""); setCargosDestino({}); setPeriodoSel("");
     setShowTarjetaForm(false);
@@ -160,9 +159,7 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
     setError("");
     try {
       // 1. Subir el PDF
-      const uploadRes = await base44.integrations.Core.UploadFile({ file });
-      const url = uploadRes.file_url;
-      setFileUrl(url);
+      await base44.integrations.Core.UploadFile({ file });
 
       // Convertir el archivo a base64 para análisis directo con IA multimodal
       let fileBase64 = "";

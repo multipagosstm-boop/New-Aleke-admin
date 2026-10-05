@@ -295,7 +295,7 @@ export default function PUCTreeView({ cuentas, filters, onEdit, onDelete }) {
         )}
       </div>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }}>
+      <AlertDialog open={!!deleteTarget} onOpenChange={(_open) => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>¿Eliminar cuenta del PUC?</AlertDialogTitle>

@@ -60,23 +60,6 @@ export default function Clientes() {
 
   useEffect(() => { loadData(); }, []);
 
-  const vinculaciones = useMemo(() => {
-    const map = {};
-    productos.forEach((p) => {
-      if (p.titular_id) {
-        if (!map[p.titular_id]) map[p.titular_id] = { tdc: 0, cda: 0 };
-        map[p.titular_id].tdc += 1;
-      }
-    });
-    cuentasAhorro.forEach((c) => {
-      if (c.titular_id) {
-        if (!map[c.titular_id]) map[c.titular_id] = { tdc: 0, cda: 0 };
-        map[c.titular_id].cda += 1;
-      }
-    });
-    return map;
-  }, [productos, cuentasAhorro]);
-
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return clientes.filter((c) => {

@@ -7,9 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-
-const hoy = new Date().toISOString().substring(0, 10);
-
 export default function InmuebleForm({ open, onOpenChange, editing, onSaved }) {
   const [form, setForm] = useState({
     nombre: "", descripcion: "", direccion: "",

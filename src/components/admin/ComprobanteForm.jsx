@@ -195,13 +195,12 @@ export default function ComprobanteForm({
         confirmar_sobregiro: confirmarSobregiro
       };
 
-      let response;
       if (editing) {
         payload.comprobante_id = editing.id;
         payload.motivo = motivo.trim();
-        response = await base44.functions.invoke("modificarComprobante", payload);
+        await base44.functions.invoke("modificarComprobante", payload);
       } else {
-        response = await base44.functions.invoke("createComprobante", payload);
+        await base44.functions.invoke("createComprobante", payload);
       }
 
       onSaved();

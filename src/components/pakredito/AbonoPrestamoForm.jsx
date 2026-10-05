@@ -167,7 +167,6 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
                       ? proyectarAbonoCuotaFija(cuotas, Number(aplicaciones[p.id]) || 0)
                       : null;
                     const interesProyectado = proy ? (proy.intereses + proy.exceso) : 0;
-                    const capitalProyectado = proy ? proy.capital : 0;
                     const capitalMesVencido = p.modelo === "mes_vencido" && sel
                       ? Math.max(0, Number(aplicaciones[p.id]) - Number(interesesInput[p.id] || 0))
                       : 0;

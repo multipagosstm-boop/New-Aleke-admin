@@ -59,7 +59,7 @@ export default function EditarDesembolsoDialog({ open, onOpenChange, onSaved, pr
             tipo_movimiento_tdc: m.tipo_movimiento_tdc || ""
           }));
         setMovimientos(credits.length > 0 ? credits : [{ ...MOV_VACIO }]);
-      } catch (e) {
+      } catch {
         setError("No se pudieron cargar los datos del desembolso");
       } finally {
         setLoading(false);
