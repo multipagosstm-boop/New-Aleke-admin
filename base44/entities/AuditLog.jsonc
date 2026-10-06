@@ -1,0 +1,40 @@
+{
+  "name": "AuditLog",
+  "type": "object",
+  "properties": {
+    "table_name": {
+      "type": "string",
+      "description": "Nombre de la tabla afectada (e.g. contrato_arriendo, prestamo, cliente)"
+    },
+    "record_id": {
+      "type": "string",
+      "description": "ID del registro creado, modificado o eliminado"
+    },
+    "action": {
+      "type": "string",
+      "description": "Tipo de operación CRUD (create, update, delete) o acción específica capturada (crearContrato, registrarPago, etc.)"
+    },
+    "action_type": {
+      "type": "string",
+      "description": "Acción específica capturada del payload o dispatcher"
+    },
+    "user_id": {
+      "type": "string"
+    },
+    "user_email": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Datos insertados o modificados"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Metadatos adicionales de la operación"
+    }
+  },
+  "required": [
+    "table_name",
+    "action"
+  ]
+}

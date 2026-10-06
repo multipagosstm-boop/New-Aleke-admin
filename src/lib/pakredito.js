@@ -70,22 +70,52 @@ export function generarAmortizacionCuotaFija(capital, tasaNominal, periodo, nume
   return { cuota, tasa_efectiva_periodo: i, tasa_nominal_derivada: tasaNominalUsada, schedule, totalIntereses, totalAPagar: cuota * numeroCuotas };
 }
 
-export function generarAmortizacionMesVencido(capital, tasaNominal, numeroCuotas, fechaInicio) {
+export function generarAmortizacionMesVencido(capital, tasaNominal, arg3, arg4, arg5) {
+  let periodo = "mensual";
+  let numeroCuotas = 1;
+  let fechaInicio = "";
+
+  if (typeof arg3 === "string" && ["diaria", "semanal", "quincenal", "mensual"].includes(arg3)) {
+    periodo = arg3;
+    numeroCuotas = Number(arg4) || 1;
+    fechaInicio = arg5 || "";
+  } else {
+    numeroCuotas = Number(arg3) || 1;
+    fechaInicio = arg4 || "";
+    if (typeof arg5 === "string" && ["diaria", "semanal", "quincenal", "mensual"].includes(arg5)) {
+      periodo = arg5;
+    }
+  }
+
+  const i = tasaEfectivaPeriodo(tasaNominal, periodo);
   const schedule = [];
-  const capBase = capital / numeroCuotas;
+  const capBase = capital / Math.max(1, numeroCuotas);
   let saldo = capital;
+
   for (let n = 1; n <= numeroCuotas; n++) {
-    const interes = saldo * tasaNominal;
+    const interes = saldo * i;
     const cap = n === numeroCuotas ? saldo : capBase;
     saldo -= cap;
     schedule.push({
-      numero: n, fecha_vencimiento: sumarPeriodo(fechaInicio, "mensual", n),
-      cuota: cap + interes, interes, capital_abono: cap, saldo_capital: Math.max(0, saldo),
-      estado: "pendiente", valor_pagado: 0
+      numero: n,
+      fecha_vencimiento: sumarPeriodo(fechaInicio, periodo, n),
+      cuota: cap + interes,
+      interes,
+      capital_abono: cap,
+      saldo_capital: Math.max(0, saldo),
+      estado: "pendiente",
+      valor_pagado: 0
     });
   }
   const totalIntereses = schedule.reduce((s, r) => s + r.interes, 0);
-  return { cuota: 0, tasa_efectiva_periodo: tasaNominal, schedule, totalIntereses, totalAPagar: capital + totalIntereses };
+  return {
+    cuota: 0,
+    cuota_inicial: schedule[0]?.cuota || 0,
+    tasa_efectiva_periodo: i,
+    schedule,
+    totalIntereses,
+    totalAPagar: capital + totalIntereses
+  };
 }
 
 export function estimarInteresesMesVencido(saldoCapital, tasaNominal, fechaUltimoMovimiento, fechaAbono) {
@@ -97,12 +127,12 @@ export function estimarInteresesMesVencido(saldoCapital, tasaNominal, fechaUltim
 }
 
 // Proyecta cuántos intereses y capital cubre un abono sobre las cuotas
-// pendientes de un crédito de cuota fija, sin mutar los registros.
+// pendientes de un crédito de cuota fija o variable, sin mutar los registros.
 export function proyectarAbonoCuotaFija(cuotas, valorAplicado) {
   let restante = valorAplicado;
   let intereses = 0;
   let capital = 0;
-  for (const c of cuotas) {
+  for (const c of (cuotas || [])) {
     if (restante <= 0) break;
     if (c.estado === "pagada") continue;
     // Dentro de cada cuota los intereses se pagan antes que el capital.
@@ -120,4 +150,30 @@ export function proyectarAbonoCuotaFija(cuotas, valorAplicado) {
   }
   const exceso = Math.max(0, restante);
   return { intereses, capital, exceso };
+}
+
+// Calcula el Saldo Total a Deber (valor final pendiente por pagar)
+export function calcularSaldoTotalDeber(prestamo, cuotas = []) {
+  if (!prestamo) return 0;
+  if (prestamo.estado === "saldado" || (Number(prestamo.saldo_capital) <= 0.01 && !prestamo.saldo_intereses)) {
+    return 0;
+  }
+
+  if (Array.isArray(cuotas) && cuotas.length > 0) {
+    const pendientes = cuotas.filter((c) => c.estado !== "pagada");
+    if (pendientes.length > 0) {
+      const sumaPendiente = pendientes.reduce(
+        (sum, c) => sum + Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0)),
+        0
+      );
+      return sumaPendiente + (Number(prestamo.saldo_intereses) || 0);
+    }
+  }
+
+  // Fallback si no hay cuotas cargadas: proporcional al capital o total_a_pagar
+  const totalAPagar = Number(prestamo.total_a_pagar) || (Number(prestamo.capital) + Number(prestamo.total_intereses || 0));
+  const capital = Number(prestamo.capital) || 1;
+  const saldoCapital = Number(prestamo.saldo_capital) || 0;
+  const proporcion = capital > 0 ? (saldoCapital / capital) : 0;
+  return Math.round((totalAPagar * proporcion) + (Number(prestamo.saldo_intereses) || 0));
 }

@@ -42,6 +42,10 @@ export default function AlekeRooftop() {
   const [gestionar, setGestionar] = useState({ open: false, inmueble: null });
   const [inquilinoForm, setInquilinoForm] = useState({ open: false, editing: null });
   const [actualizando, setActualizando] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  const [deleteInqDialog, setDeleteInqDialog] = useState({ open: false, inquilino: null, error: "" });
+  const [deleteInmDialog, setDeleteInmDialog] = useState({ open: false, inmueble: null, error: "" });
+  const [deleting, setDeleting] = useState(false);
 
   const [filtroContratoEstado, setFiltroContratoEstado] = useState("todos");
   const [filtroContratoInmueble, setFiltroContratoInmueble] = useState("todos");
@@ -82,34 +86,33 @@ export default function AlekeRooftop() {
 
   const handleActualizarEstados = async () => {
     setActualizando(true);
+    setFeedback(null);
     try {
       const resp = await base44.functions.invoke("gestionarRooftop", { action: "actualizarEstadoContratos" });
       if (resp.data?.error) throw new Error(resp.data.error);
       await loadData();
-      alert(`Estados actualizados: ${resp.data?.contratos_actualizados || 0} contratos, ${resp.data?.pagos_en_mora || 0} pagos en mora`);
-    } catch (e) { alert("Error: " + e.message); }
+      setFeedback({
+        type: "success",
+        text: `Estados actualizados: ${resp.data?.contratos_actualizados || 0} contratos, ${resp.data?.pagos_en_mora || 0} pagos en mora`
+      });
+    } catch (e) {
+      setFeedback({ type: "error", text: "Error: " + e.message });
+    }
     setActualizando(false);
   };
 
   const handleCambiarEstadoInmueble = async (inm, estado) => {
     if (estado === "disponible" && inm.estado === "ocupado") {
-      alert("No se puede cambiar a disponible un inmueble ocupado. Termine el contrato primero.");
+      setFeedback({ type: "error", text: "No se puede cambiar a disponible un inmueble ocupado. Termine el contrato primero." });
       return;
     }
     try {
       await base44.entities.Inmueble.update(inm.id, { estado });
-      loadData();
-    } catch (e) { alert("Error: " + e.message); }
-  };
-
-  const handleEliminarInquilino = async (inq) => {
-    const usado = contratos.some((c) => c.inquilino_id === inq.id && (c.estado === "vigente" || c.estado === "por_vencer"));
-    if (usado) { alert("Este inquilino tiene un contrato activo. No se puede eliminar."); return; }
-    if (!confirm(`¿Eliminar al inquilino ${inq.nombre_completo}?`)) return;
-    try {
-      await base44.entities.Inquilino.delete(inq.id);
-      loadData();
-    } catch (e) { alert("Error: " + e.message); }
+      await loadData();
+      setFeedback({ type: "success", text: `Estado de ${inm.nombre} actualizado a ${estado}.` });
+    } catch (e) {
+      setFeedback({ type: "error", text: "Error al actualizar inmueble: " + e.message });
+    }
   };
 
   // === Alertas calculadas ===
@@ -201,6 +204,13 @@ export default function AlekeRooftop() {
         </Button>
       </div>
 
+      {feedback && (
+        <div className={`p-3 rounded-md text-sm flex items-center justify-between ${feedback.type === 'error' ? 'bg-destructive/10 text-destructive border border-destructive/30' : 'bg-primary/10 text-primary border border-primary/30'}`}>
+          <span>{feedback.text}</span>
+          <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setFeedback(null)}>Cerrar</Button>
+        </div>
+      )}
+
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="resumen"><LayoutDashboard className="w-4 h-4 mr-1" />Resumen</TabsTrigger>
@@ -274,9 +284,14 @@ export default function AlekeRooftop() {
                         {cont && <div><span className="text-muted-foreground text-xs">Pago:</span> día {new Date(cont.fecha_inicio + "T00:00:00").getDate()} de cada mes</div>}
                         {cont && <div><span className="text-muted-foreground text-xs">Contrato vence:</span> <span className="font-mono text-xs">{formatDate(cont.fecha_fin)}</span></div>}
                       </div>
-                      <div className="flex gap-1 pt-1 border-t border-border/40">
-                        <Button size="sm" variant="outline" onClick={() => { setTab("pagos"); setFiltroPagoInmueble(inm.id); }}>Ver pagos</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setGestionar({ open: true, inmueble: inm })}>Gestionar</Button>
+                      <div className="flex items-center justify-between pt-1 border-t border-border/40">
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="outline" onClick={() => { setTab("pagos"); setFiltroPagoInmueble(inm.id); }}>Ver pagos</Button>
+                          <Button size="sm" variant="ghost" onClick={() => setGestionar({ open: true, inmueble: inm })}>Gestionar</Button>
+                        </div>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" title="Eliminar inmueble" onClick={() => setDeleteInmDialog({ open: true, inmueble: inm, error: "" })}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
                       </div>
                     </CardContent>
                   </Card>
@@ -324,7 +339,7 @@ export default function AlekeRooftop() {
                         <td className="px-4 py-2">
                           <div className="flex justify-end gap-1">
                             <Button size="icon" variant="ghost" title="Editar" onClick={() => setInquilinoForm({ open: true, editing: i })}><Pencil className="w-4 h-4" /></Button>
-                            <Button size="icon" variant="ghost" title="Eliminar" onClick={() => handleEliminarInquilino(i)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                            <Button size="icon" variant="ghost" title="Eliminar" onClick={() => setDeleteInqDialog({ open: true, inquilino: i, error: "" })}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                           </div>
                         </td>
                       </tr>
@@ -694,6 +709,19 @@ export default function AlekeRooftop() {
                 <Home className="w-4 h-4 mr-2 text-success" /> Marcar como disponible
               </Button>
             )}
+            <div className="pt-2 border-t border-border/50">
+              <Button
+                className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10"
+                variant="ghost"
+                onClick={() => {
+                  const inm = gestionar.inmueble;
+                  setGestionar({ open: false, inmueble: null });
+                  setDeleteInmDialog({ open: true, inmueble: inm, error: "" });
+                }}
+              >
+                <Trash2 className="w-4 h-4 mr-2" /> Eliminar inmueble
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -701,11 +729,140 @@ export default function AlekeRooftop() {
       {/* === MODALS === */}
       <InmuebleForm open={inmuebleForm.open} onOpenChange={(v) => setInmuebleForm({ open: v, editing: v ? inmuebleForm.editing : null })} editing={inmuebleForm.editing} onSaved={loadData} />
       <ContratoForm open={contratoForm.open} onOpenChange={(v) => setContratoForm({ open: v, inmueble: v ? contratoForm.inmueble : null })} inmuebles={inmuebles} inquilinos={inquilinos} cdas={cdas} inmueblePreselect={contratoForm.inmueble} onSaved={loadData} />
-      <PagoForm open={pagoForm.open} onOpenChange={(v) => setPagoForm({ open: v, pago: v ? pagoForm.pago : null })} pago={pagoForm.pago} inmuebles={inmuebles} clientes={clientes} cdas={cdas} onSaved={loadData} />
+      <PagoForm open={pagoForm.open} onOpenChange={(v) => setPagoForm({ open: v, pago: v ? pagoForm.pago : null })} pago={pagoForm.pago} inmuebles={inmuebles} clientes={clientes} inquilinos={inquilinos} cdas={cdas} onSaved={loadData} />
       <ContratoDetail open={contratoDetail.open} onOpenChange={(v) => setContratoDetail({ open: v, contrato: v ? contratoDetail.contrato : null })} contrato={contratoDetail.contrato} inmuebles={inmuebles} clientes={clientes} inquilinos={inquilinos} pagos={pagos} cdas={cdas} onSaved={loadData} />
       <RenovarContratoDialog open={renovar.open} onOpenChange={(v) => setRenovar({ open: v, contrato: v ? renovar.contrato : null })} contrato={renovar.contrato} onSaved={loadData} />
       <TerminarContratoDialog open={terminar.open} onOpenChange={(v) => setTerminar({ open: v, contrato: v ? terminar.contrato : null })} contrato={terminar.contrato} cdas={cdas} onSaved={loadData} />
       <InquilinoForm open={inquilinoForm.open} onOpenChange={(v) => setInquilinoForm({ open: v, editing: v ? inquilinoForm.editing : null })} editing={inquilinoForm.editing} onSaved={loadData} />
+
+      {/* === DIALOG: Confirmar eliminación de inquilino === */}
+      <Dialog open={deleteInqDialog.open} onOpenChange={(v) => !v && setDeleteInqDialog({ open: false, inquilino: null, error: "" })}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Eliminar Inquilino</DialogTitle>
+          </DialogHeader>
+          {deleteInqDialog.inquilino && (() => {
+            const inq = deleteInqDialog.inquilino;
+            const activo = contratos.find((c) => c.inquilino_id === inq.id && (c.estado === "vigente" || c.estado === "por_vencer"));
+            return (
+              <div className="space-y-3">
+                {activo ? (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive space-y-1">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0" /> No se puede eliminar este inquilino
+                    </div>
+                    <p className="text-xs">
+                      El inquilino tiene el contrato activo <strong>{activo.codigo || "vigente"}</strong>. Debe terminar o rescindir el contrato antes de poder eliminar al inquilino.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="text-sm space-y-2">
+                    <p>
+                      ¿Está seguro de que desea eliminar al inquilino <strong>{inq.nombre_completo}</strong>{inq.numero_documento ? ` (${inq.tipo_documento || "CC"} ${inq.numero_documento})` : ""}?
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Esta acción eliminará el registro de la lista de inquilinos.
+                    </p>
+                  </div>
+                )}
+                {deleteInqDialog.error && (
+                  <div className="text-xs text-destructive">{deleteInqDialog.error}</div>
+                )}
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" onClick={() => setDeleteInqDialog({ open: false, inquilino: null, error: "" })}>
+                    Cancelar
+                  </Button>
+                  {!activo && (
+                    <Button
+                      variant="destructive"
+                      disabled={deleting}
+                      onClick={async () => {
+                        setDeleting(true);
+                        try {
+                          await base44.entities.Inquilino.delete(inq.id);
+                          await loadData();
+                          setFeedback({ type: "success", text: `Inquilino ${inq.nombre_completo} eliminado con éxito.` });
+                          setDeleteInqDialog({ open: false, inquilino: null, error: "" });
+                        } catch (e) {
+                          setDeleteInqDialog((d) => ({ ...d, error: e.message || "Error al eliminar inquilino" }));
+                        }
+                        setDeleting(false);
+                      }}
+                    >
+                      {deleting ? "Eliminando..." : "Eliminar Inquilino"}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* === DIALOG: Confirmar eliminación de inmueble === */}
+      <Dialog open={deleteInmDialog.open} onOpenChange={(v) => !v && setDeleteInmDialog({ open: false, inmueble: null, error: "" })}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Eliminar Inmueble</DialogTitle>
+          </DialogHeader>
+          {deleteInmDialog.inmueble && (() => {
+            const inm = deleteInmDialog.inmueble;
+            const activo = contratos.find((c) => c.inmueble_id === inm.id && (c.estado === "vigente" || c.estado === "por_vencer"));
+            const estaOcupado = inm.estado === "ocupado" || !!activo;
+            return (
+              <div className="space-y-3">
+                {estaOcupado ? (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive space-y-1">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0" /> No se puede eliminar este inmueble
+                    </div>
+                    <p className="text-xs">
+                      El inmueble se encuentra <strong>{inm.estado}</strong> {activo ? `con el contrato activo ${activo.codigo || "vigente"}` : ""}. Para eliminarlo, primero debe terminar el contrato y liberar el inmueble.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="text-sm space-y-2">
+                    <p>
+                      ¿Está seguro de que desea eliminar el inmueble <strong>{inm.nombre}</strong>{inm.direccion ? ` (${inm.direccion})` : ""}?
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Esta acción eliminará el inmueble de forma permanente del sistema.
+                    </p>
+                  </div>
+                )}
+                {deleteInmDialog.error && (
+                  <div className="text-xs text-destructive">{deleteInmDialog.error}</div>
+                )}
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" onClick={() => setDeleteInmDialog({ open: false, inmueble: null, error: "" })}>
+                    Cancelar
+                  </Button>
+                  {!estaOcupado && (
+                    <Button
+                      variant="destructive"
+                      disabled={deleting}
+                      onClick={async () => {
+                        setDeleting(true);
+                        try {
+                          await base44.entities.Inmueble.delete(inm.id);
+                          await loadData();
+                          setFeedback({ type: "success", text: `Inmueble ${inm.nombre} eliminado con éxito.` });
+                          setDeleteInmDialog({ open: false, inmueble: null, error: "" });
+                        } catch (e) {
+                          setDeleteInmDialog((d) => ({ ...d, error: e.message || "Error al eliminar inmueble" }));
+                        }
+                        setDeleting(false);
+                      }}
+                    >
+                      {deleting ? "Eliminando..." : "Eliminar Inmueble"}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

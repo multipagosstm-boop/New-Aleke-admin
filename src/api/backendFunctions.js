@@ -13,7 +13,9 @@ import {
 import {
   generarAmortizacionCuotaFija,
   generarAmortizacionMesVencido,
-  estimarInteresesMesVencido
+  estimarInteresesMesVencido,
+  sumarPeriodo,
+  calcularSaldoTotalDeber
 } from "../lib/pakredito";
 import { calcularNextCodigo, getClaseNombre } from "../lib/cuentasPuc";
 import { formatCOP } from "../lib/contabilidad";
@@ -646,11 +648,12 @@ export async function gestionarPakredito(entities, payload = {}) {
     const numCuotas = Math.max(1, parseInt(numero_cuotas, 10) || 1);
     const tasaNom = Number(tasa_nominal) || 0;
     const cuotaMan = Number(cuota_manual) || 0;
+    const periodoFinal = periodo || "mensual";
 
     // Generar tabla de amortización
     const gen = modelo === "cuota_fija"
-      ? generarAmortizacionCuotaFija(capital, tasaNom, periodo, numCuotas, fechaDoc, cuotaMan)
-      : generarAmortizacionMesVencido(capital, tasaNom, numCuotas, fechaDoc);
+      ? generarAmortizacionCuotaFija(capital, tasaNom, periodoFinal, numCuotas, fechaDoc, cuotaMan)
+      : generarAmortizacionMesVencido(capital, tasaNom, periodoFinal, numCuotas, fechaDoc);
 
     const tasaNominalFinal = gen.tasa_nominal_derivada !== undefined ? gen.tasa_nominal_derivada : tasaNom;
 
@@ -708,7 +711,7 @@ export async function gestionarPakredito(entities, payload = {}) {
       modelo,
       capital,
       tasa_nominal: tasaNominalFinal,
-      periodo: modelo === "cuota_fija" ? periodo : "mensual",
+      periodo: periodoFinal,
       numero_cuotas: numCuotas,
       fecha_prestamo: fechaDoc,
       cuota_fija: modelo === "cuota_fija" ? gen.cuota : 0,
@@ -876,7 +879,39 @@ export async function gestionarPakredito(entities, payload = {}) {
       let valorProximoPago = p.valor_proximo_pago;
       let nuevoSaldoIntereses = p.saldo_intereses || 0;
 
-      if (p.modelo === "cuota_fija") {
+      const periodoCredito = p.periodo || "mensual";
+      let notaAdicional = "";
+
+      if (p.modelo === "mes_vencido" && capitalAbono <= 0 && intereses > 0) {
+        // CASO: CUOTA VARIABLE - PAGO EXCLUSIVO DE INTERESES (PRÓRROGA AUTOMÁTICA)
+        // Si únicamente paga intereses, se prorroga y pasa hasta el siguiente plazo a pagar.
+        const baseFecha = (p.fecha_proximo_pago && p.fecha_proximo_pago >= fechaDoc) ? p.fecha_proximo_pago : fechaDoc;
+        fechaProximoPago = sumarPeriodo(baseFecha, periodoCredito, 1);
+        valorProximoPago = Math.round(nuevoSaldoCapital * (Number(p.tasa_efectiva_periodo) || Number(p.tasa_nominal) || 0));
+
+        // En la tabla de amortización: registrar el pago en la cuota actual y prorrogar vencimientos pendientes
+        const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+        const cuotasPendientes = (cuotas || []).filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
+
+        if (cuotasPendientes.length > 0) {
+          const cuotaActual = cuotasPendientes[0];
+          await entities.CuotaAmortizacion.update(cuotaActual.id, {
+            valor_pagado: (Number(cuotaActual.valor_pagado) || 0) + intereses,
+            fecha_pago: fechaDoc,
+            abono_id: abono.id
+          });
+
+          // Desplazar las fechas de vencimiento de las cuotas pendientes en 1 periodo
+          for (const c of cuotasPendientes) {
+            const nuevaVenc = sumarPeriodo(c.fecha_vencimiento, periodoCredito, 1);
+            await entities.CuotaAmortizacion.update(c.id, {
+              fecha_vencimiento: nuevaVenc
+            });
+          }
+        }
+        notaAdicional = `Prórroga por pago de intereses (${fechaDoc}): +1 ${periodoCredito} → nuevo vencimiento ${fechaProximoPago}`;
+      } else {
+        // APLICACIÓN A CUOTAS (Tanto cuota fija como mes vencido con abono a capital)
         const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
         const cuotasOrdenadas = (cuotas || []).sort((a, b) => (Number(a.numero) || 0) - (Number(b.numero) || 0));
 
@@ -914,28 +949,32 @@ export async function gestionarPakredito(entities, payload = {}) {
         const prox = (cuotasActualizadas || []).sort((a, b) => a.numero - b.numero).find((c) => c.estado !== "pagada");
         fechaProximoPago = prox ? prox.fecha_vencimiento : null;
         valorProximoPago = prox ? Math.max(0, (Number(prox.cuota) || 0) - (Number(prox.valor_pagado) || 0)) : 0;
-      } else if (p.modelo === "mes_vencido") {
-        nuevoSaldoIntereses = Math.max(0, (Number(p.saldo_intereses) || 0) - intereses);
-        valorProximoPago = nuevoSaldoCapital > 0 ? (nuevoSaldoCapital * (Number(p.tasa_nominal) || 0)) : 0;
       }
 
       let nuevoEstado = "vigente";
-      if (nuevoSaldoCapital <= 0) {
+      if (nuevoSaldoCapital <= 0.01) {
         nuevoEstado = "saldado";
         fechaProximoPago = null;
         valorProximoPago = 0;
       } else if (fechaProximoPago && fechaProximoPago < hoy) {
         nuevoEstado = "en_mora";
+      } else {
+        nuevoEstado = "vigente";
       }
+
+      const notasFinales = notaAdicional
+        ? (p.notas ? `${p.notas}\n${notaAdicional}` : notaAdicional)
+        : (p.notas || null);
 
       // Actualizar préstamo en Supabase (solo columnas válidas de la tabla prestamo)
       await entities.Prestamo.update(p.id, {
         saldo_capital: nuevoSaldoCapital,
         fecha_ultimo_abono: fechaDoc,
-        saldo_intereses: p.modelo === "mes_vencido" ? nuevoSaldoIntereses : 0,
+        saldo_intereses: 0,
         fecha_proximo_pago: fechaProximoPago,
         valor_proximo_pago: valorProximoPago,
-        estado: nuevoEstado
+        estado: nuevoEstado,
+        notas: notasFinales
       });
     }
 
@@ -1322,7 +1361,7 @@ export async function gestionarPakredito(entities, payload = {}) {
 
     const gen = p.modelo === "cuota_fija"
       ? generarAmortizacionCuotaFija(p.capital, tasaNom, periodo, numCuotas, fechaPrestamo, cuotaMan)
-      : generarAmortizacionMesVencido(p.capital, tasaNom, numCuotas, fechaPrestamo);
+      : generarAmortizacionMesVencido(p.capital, tasaNom, periodo, numCuotas, fechaPrestamo);
 
     const tasaNominalFinal = gen.tasa_nominal_derivada !== undefined ? gen.tasa_nominal_derivada : tasaNom;
 
@@ -1364,7 +1403,7 @@ export async function gestionarPakredito(entities, payload = {}) {
     const updated = await entities.Prestamo.update(p.id, {
       notas,
       tasa_nominal: tasaNominalFinal,
-      periodo: p.modelo === "cuota_fija" ? periodo : "mensual",
+      periodo: periodo,
       numero_cuotas: numCuotas,
       fecha_prestamo: fechaPrestamo,
       cuota_fija: p.modelo === "cuota_fija" ? gen.cuota : 0,
@@ -1465,7 +1504,7 @@ export async function gestionarPakredito(entities, payload = {}) {
     // Regenerar amortización con nuevoCapital
     const gen = p.modelo === "cuota_fija"
       ? generarAmortizacionCuotaFija(nuevoCapital, p.tasa_nominal, p.periodo, p.numero_cuotas, p.fecha_prestamo, p.cuota_fija)
-      : generarAmortizacionMesVencido(nuevoCapital, p.tasa_nominal, p.numero_cuotas, p.fecha_prestamo);
+      : generarAmortizacionMesVencido(nuevoCapital, p.tasa_nominal, p.periodo || "mensual", p.numero_cuotas, p.fecha_prestamo);
 
     // Reemplazar cuotas
     const cuotasPrevias = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
@@ -1561,41 +1600,481 @@ export async function gestionarPakredito(entities, payload = {}) {
   return { success: true, ...params };
 }
 
+function rooftopAddMonths(dateStr, months) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setMonth(d.getMonth() + Number(months));
+  return d.toISOString().substring(0, 10);
+}
+
+function rooftopDiaDesdeFecha(fechaStr) {
+  return new Date((fechaStr || "") + "T00:00:00").getDate() || 1;
+}
+
+function rooftopGetPrimerVencimiento(fechaInicio, diaPago) {
+  const d = Number(diaPago) || 1;
+  const inicio = new Date(fechaInicio + "T00:00:00");
+  const startDay = inicio.getDate();
+  let año = inicio.getFullYear();
+  let mes = inicio.getMonth(); // 0-based
+  if (d < startDay) {
+    mes += 1;
+    if (mes > 11) { mes = 0; año += 1; }
+  }
+  return año + "-" + String(mes + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+}
+
+function rooftopGetFechaVencimiento(diaPago, periodo) {
+  return periodo + "-" + String(diaPago).padStart(2, "0");
+}
+
+function rooftopCalcularDiasMora(fechaPago, fechaVencimiento) {
+  const pago = new Date(fechaPago + "T00:00:00");
+  const venc = new Date(fechaVencimiento + "T00:00:00");
+  const diff = Math.floor((pago - venc) / (1000 * 60 * 60 * 24));
+  return diff > 0 ? diff : 0;
+}
+
+async function rooftopGenerarCodigoArriendo(entities) {
+  let consec = (await entities.Consecutivo.filter({ tipo: "arriendo" }).catch(() => []))?.[0];
+  let maxNum = consec ? Number(consec.ultimo_numero) || 0 : 0;
+
+  const contratos = await entities.ContratoArriendo.list().catch(() => []);
+  for (const c of contratos) {
+    if (c.codigo && c.codigo.startsWith("ARR-")) {
+      const n = parseInt(c.codigo.replace("ARR-", ""), 10);
+      if (!isNaN(n) && n > maxNum) maxNum = n;
+    }
+  }
+
+  const nextNum = maxNum + 1;
+  if (consec) {
+    await entities.Consecutivo.update(consec.id, { ultimo_numero: nextNum }).catch(() => {});
+  } else {
+    await entities.Consecutivo.create({ tipo: "arriendo", año: 0, ultimo_numero: nextNum }).catch(() => {});
+  }
+  return "ARR-" + String(nextNum).padStart(3, "0");
+}
+
+async function rooftopResolverInquilino(entities, id) {
+  if (!id) return null;
+  try {
+    const inq = await entities.Inquilino.get(id);
+    if (inq) return inq;
+  } catch {}
+  try {
+    const cli = await entities.Cliente.get(id);
+    if (cli) return cli;
+  } catch {}
+  return null;
+}
+
 export async function gestionarRooftop(entities, payload = {}) {
   const action = payload.action || payload.accion;
+
   if (action === "actualizarEstadoContratos") {
-    const contratos = await entities.ContratoArriendo.list();
-    const hoy = new Date().toISOString().split("T")[0];
+    const hoy = new Date().toISOString().substring(0, 10);
+    const hoyDate = new Date(hoy + "T00:00:00");
+
+    const contratos = await entities.ContratoArriendo.list().catch(() => []);
+    let contratos_actualizados = 0;
     for (const c of (contratos || [])) {
-      if (c.fecha_fin && c.fecha_fin < hoy && c.estado === "activo") {
-        await entities.ContratoArriendo.update(c.id, { estado: "finalizado" });
+      if (c.estado === "vigente" && c.fecha_fin) {
+        const fechaFin = new Date(c.fecha_fin + "T00:00:00");
+        const diffDays = Math.floor((fechaFin - hoyDate) / (1000 * 60 * 60 * 24));
+        if (diffDays < 0) {
+          await entities.ContratoArriendo.update(c.id, { estado: "vencido" });
+          contratos_actualizados++;
+        } else if (diffDays <= 30) {
+          await entities.ContratoArriendo.update(c.id, { estado: "por_vencer" });
+          contratos_actualizados++;
+        }
       }
     }
-    return { success: true };
+
+    const pagos = await entities.PagoArriendo.list().catch(() => []);
+    let pagos_en_mora = 0;
+    for (const p of (pagos || [])) {
+      if ((p.estado === "pendiente" || p.estado === "parcial") && p.fecha_vencimiento) {
+        const fechaVenc = new Date(p.fecha_vencimiento + "T00:00:00");
+        const diffDays = Math.floor((hoyDate - fechaVenc) / (1000 * 60 * 60 * 24));
+        if (diffDays > 0) {
+          await entities.PagoArriendo.update(p.id, {
+            estado: "en_mora",
+            dias_mora: diffDays
+          });
+          pagos_en_mora++;
+        }
+      }
+    }
+    return { success: true, contratos_actualizados, pagos_en_mora };
   }
+
   if (action === "crearContrato") {
-    const contrato = await entities.ContratoArriendo.create(payload.data || payload);
-    return { success: true, contrato };
+    const {
+      inmueble_id, inquilino_id, fecha_inicio, duracion_meses, tipo_contrato,
+      valor_arriendo, valor_deposito, cda_pago_id, fecha_deposito, notas
+    } = payload;
+
+    const inmueble = await entities.Inmueble.get(inmueble_id);
+    if (!inmueble) throw new Error("Inmueble no encontrado");
+    if (inmueble.estado === "ocupado") {
+      throw new Error(`El inmueble "${inmueble.nombre}" ya está ocupado. No se puede crear un segundo contrato.`);
+    }
+
+    const contratosActivos = await entities.ContratoArriendo.filter({
+      inmueble_id,
+      estado: { $in: ["vigente", "por_vencer"] }
+    }).catch(() => []);
+    if (contratosActivos && contratosActivos.length > 0) {
+      throw new Error(`El inmueble "${inmueble.nombre}" tiene un contrato activo (${contratosActivos[0].codigo || 'vigente'}). Termínelo antes de crear uno nuevo.`);
+    }
+
+    const codigo = await rooftopGenerarCodigoArriendo(entities);
+    const meses = Number(duracion_meses) || 6;
+    const fecha_fin = rooftopAddMonths(fecha_inicio, meses);
+
+    const contrato = await entities.ContratoArriendo.create({
+      codigo,
+      inmueble_id,
+      inquilino_id,
+      fecha_inicio,
+      fecha_fin,
+      duracion_meses: meses,
+      tipo_contrato: tipo_contrato || null,
+      valor_arriendo: Number(valor_arriendo) || 0,
+      valor_deposito: Number(valor_deposito) || 0,
+      estado: "vigente",
+      deposito_pagado: false,
+      alertas_enviadas: 0,
+      notas: notas || ""
+    });
+
+    await entities.Inmueble.update(inmueble_id, {
+      estado: "ocupado",
+      inquilino_id
+    });
+
+    const diaPago = rooftopDiaDesdeFecha(fecha_inicio);
+    const fecha_vencimiento = rooftopGetPrimerVencimiento(fecha_inicio, diaPago);
+    const periodo = fecha_vencimiento.substring(0, 7);
+    const hoyStr = new Date().toISOString().substring(0, 10);
+    const diasMoraInicial = hoyStr > fecha_vencimiento ? rooftopCalcularDiasMora(hoyStr, fecha_vencimiento) : 0;
+    const estadoInicial = diasMoraInicial > 0 ? "en_mora" : "pendiente";
+
+    await entities.PagoArriendo.create({
+      inmueble_id,
+      contrato_id: contrato.id,
+      inquilino_id,
+      periodo,
+      fecha_vencimiento,
+      valor_esperado: Number(valor_arriendo) || 0,
+      valor_pagado: 0,
+      saldo_restante: Number(valor_arriendo) || 0,
+      dias_mora: diasMoraInicial,
+      estado: estadoInicial
+    });
+
+    let comprobante_deposito = null;
+    if (cda_pago_id && Number(valor_deposito) > 0) {
+      try {
+        const cda = await entities.CuentaAhorro.get(cda_pago_id);
+        const inq = await rooftopResolverInquilino(entities, inquilino_id);
+        const inqNom = inq?.nombre_completo || inq?.nombre || "";
+        const compRes = await createComprobante(entities, {
+          tipo: "diario",
+          fecha: fecha_deposito || fecha_inicio,
+          descripcion: "Depósito arriendo - " + inmueble.nombre,
+          movimientos: [
+            {
+              subcuenta: cda.subcuenta_puc,
+              debito: Number(valor_deposito),
+              credito: 0,
+              descripcion: "Ingreso depósito arriendo",
+              cuenta_ahorro_id: cda_pago_id,
+              modelo_negocio: "alekerooftop"
+            },
+            {
+              subcuenta: "220513",
+              debito: 0,
+              credito: Number(valor_deposito),
+              descripcion: "Depósito en garantía - " + inqNom,
+              tercero: inqNom,
+              cliente_id: inquilino_id,
+              modelo_negocio: "alekerooftop"
+            }
+          ]
+        });
+        comprobante_deposito = compRes?.comprobante;
+        await entities.ContratoArriendo.update(contrato.id, {
+          deposito_pagado: true,
+          comprobante_deposito_id: compRes?.comprobante?.id || null
+        });
+      } catch (depErr) {
+        console.warn("No se pudo contabilizar el depósito inicial:", depErr);
+      }
+    }
+
+    return { success: true, contrato, pagos_generados: 1, comprobante_deposito };
   }
+
   if (action === "registrarPago") {
-    const pago = await entities.PagoArriendo.create(payload.data || payload);
-    return { success: true, pago };
-  }
-  if (action === "terminarContrato") {
-    await entities.ContratoArriendo.update(payload.contrato_id, {
-      estado: "finalizado",
-      motivo_terminacion: payload.motivo || ""
+    const { pago_arriendo_id, valor_pagado, fecha_pago, cuenta_ingreso, notas } = payload;
+    const pago = await entities.PagoArriendo.get(pago_arriendo_id);
+    if (!pago) throw new Error("Pago no encontrado");
+    if (pago.estado === "pagado") throw new Error("Este pago ya fue registrado como pagado.");
+
+    const contrato = await entities.ContratoArriendo.get(pago.contrato_id);
+    const inmueble = await entities.Inmueble.get(pago.inmueble_id);
+    const inquilino = await rooftopResolverInquilino(entities, pago.inquilino_id);
+    const inqNom = inquilino?.nombre_completo || inquilino?.nombre || "";
+
+    const valorAbono = Number(valor_pagado) || 0;
+    const totalPagado = (Number(pago.valor_pagado) || 0) + valorAbono;
+    const dias_mora = rooftopCalcularDiasMora(fecha_pago, pago.fecha_vencimiento);
+    const saldo_restante = Math.max(0, (Number(pago.valor_esperado) || 0) - totalPagado);
+
+    let estado = "pendiente";
+    if (totalPagado >= (Number(pago.valor_esperado) || 0)) {
+      estado = "pagado";
+    } else if (totalPagado > 0) {
+      estado = "parcial";
+    }
+
+    const esTeresa = (inmueble?.nombre || "").trim() === "203";
+    const subcuentaIngreso = esTeresa ? "220505" : "410504";
+    const descIngreso = esTeresa
+      ? "Arriendo Apto 203 (Teresa) - " + inmueble.nombre
+      : "Ingreso arriendo - " + inmueble.nombre;
+
+    let compRes = null;
+    if (cuenta_ingreso?.subcuenta && valorAbono > 0) {
+      compRes = await createComprobante(entities, {
+        tipo: "diario",
+        fecha: fecha_pago,
+        descripcion: "Arriendo " + pago.periodo + " - " + inmueble.nombre,
+        movimientos: [
+          {
+            subcuenta: cuenta_ingreso.subcuenta,
+            debito: valorAbono,
+            credito: 0,
+            descripcion: "Cobro arriendo " + pago.periodo,
+            cuenta_ahorro_id: cuenta_ingreso.cuenta_ahorro_id || null,
+            producto_credito_id: cuenta_ingreso.producto_credito_id || null,
+            tipo_movimiento_tdc: cuenta_ingreso.producto_credito_id ? "abono" : null,
+            modelo_negocio: "alekerooftop"
+          },
+          {
+            subcuenta: subcuentaIngreso,
+            debito: 0,
+            credito: valorAbono,
+            descripcion: descIngreso,
+            tercero: inqNom,
+            cliente_id: pago.inquilino_id,
+            modelo_negocio: "alekerooftop"
+          }
+        ]
+      });
+    }
+
+    await entities.PagoArriendo.update(pago_arriendo_id, {
+      valor_pagado: totalPagado,
+      fecha_pago_real: fecha_pago,
+      dias_mora,
+      estado,
+      saldo_restante,
+      comprobante_id: compRes?.comprobante?.id || pago.comprobante_id || null,
+      notas: notas || pago.notas || ""
     });
-    return { success: true };
+
+    let siguiente_periodo_creado = null;
+    if (estado === "pagado" && contrato && (contrato.estado === "vigente" || contrato.estado === "por_vencer")) {
+      const [año, mes] = pago.periodo.split("-").map(Number);
+      const siguienteMes = mes === 12 ? 1 : mes + 1;
+      const siguienteAño = mes === 12 ? año + 1 : año;
+      const siguientePeriodo = siguienteAño + "-" + String(siguienteMes).padStart(2, "0");
+
+      const existentes = await entities.PagoArriendo.filter({
+        contrato_id: pago.contrato_id,
+        periodo: siguientePeriodo
+      }).catch(() => []);
+      if (!existentes || existentes.length === 0) {
+        const diaPago = rooftopDiaDesdeFecha(contrato.fecha_inicio);
+        const siguienteVencimiento = rooftopGetFechaVencimiento(diaPago, siguientePeriodo);
+        const hoyStr = new Date().toISOString().substring(0, 10);
+        const diasMoraSig = hoyStr > siguienteVencimiento ? rooftopCalcularDiasMora(hoyStr, siguienteVencimiento) : 0;
+        const estadoSig = diasMoraSig > 0 ? "en_mora" : "pendiente";
+
+        siguiente_periodo_creado = await entities.PagoArriendo.create({
+          inmueble_id: pago.inmueble_id,
+          contrato_id: pago.contrato_id,
+          inquilino_id: pago.inquilino_id,
+          periodo: siguientePeriodo,
+          fecha_vencimiento: siguienteVencimiento,
+          valor_esperado: contrato.valor_arriendo,
+          valor_pagado: 0,
+          saldo_restante: contrato.valor_arriendo,
+          dias_mora: diasMoraSig,
+          estado: estadoSig
+        });
+      }
+    }
+
+    return {
+      success: true,
+      pago_actualizado: { ...pago, valor_pagado: totalPagado, dias_mora, estado, saldo_restante },
+      comprobante: compRes?.comprobante,
+      siguiente_periodo_creado
+    };
   }
-  if (action === "renovarContrato") {
-    const updated = await entities.ContratoArriendo.update(payload.contrato_id, {
-      fecha_fin: payload.nueva_fecha_fin,
-      canon_mensual: payload.nuevo_canon || payload.canon_mensual,
+
+  if (action === "abonarDeposito") {
+    const { contrato_id, valor, cuenta_ingreso, fecha, notas } = payload;
+    const contrato = await entities.ContratoArriendo.get(contrato_id);
+    if (!contrato) throw new Error("Contrato no encontrado");
+    const inmueble = await entities.Inmueble.get(contrato.inmueble_id);
+    const inquilino = await rooftopResolverInquilino(entities, contrato.inquilino_id);
+    const inqNom = inquilino?.nombre_completo || inquilino?.nombre || "";
+    const valorNum = Number(valor) || 0;
+
+    const compRes = await createComprobante(entities, {
+      tipo: "diario",
+      fecha: fecha || new Date().toISOString().substring(0, 10),
+      descripcion: "Abono depósito - " + (inmueble?.nombre || ""),
+      movimientos: [
+        {
+          subcuenta: cuenta_ingreso.subcuenta,
+          debito: valorNum,
+          credito: 0,
+          descripcion: "Abono depósito en garantía",
+          cuenta_ahorro_id: cuenta_ingreso.cuenta_ahorro_id || null,
+          producto_credito_id: cuenta_ingreso.producto_credito_id || null,
+          tipo_movimiento_tdc: cuenta_ingreso.producto_credito_id ? "abono" : null,
+          modelo_negocio: "alekerooftop"
+        },
+        {
+          subcuenta: "220513",
+          debito: 0,
+          credito: valorNum,
+          descripcion: "Depósito en garantía - " + inqNom,
+          tercero: inqNom,
+          cliente_id: contrato.inquilino_id,
+          modelo_negocio: "alekerooftop"
+        }
+      ]
+    });
+
+    const movs = await entities.MovimientoContable.filter({
+      subcuenta: "220513",
+      cliente_id: contrato.inquilino_id,
       estado: "activo"
-    });
-    return { success: true, contrato: updated };
+    }).catch(() => []);
+    const totalDeposit = (movs || []).reduce((s, m) => s + (Number(m.credito) || 0) - (Number(m.debito) || 0), 0);
+    if (totalDeposit >= Number(contrato.valor_deposito || 0)) {
+      await entities.ContratoArriendo.update(contrato.id, { deposito_pagado: true });
+    }
+
+    return { success: true, comprobante: compRes?.comprobante };
   }
+
+  if (action === "terminarContrato") {
+    const { contrato_id, devolver_deposito, cda_devolucion_id, fecha_terminacion, motivo } = payload;
+    const contrato = await entities.ContratoArriendo.get(contrato_id);
+    if (!contrato) throw new Error("Contrato no encontrado");
+    const inmueble = await entities.Inmueble.get(contrato.inmueble_id);
+
+    let comprobante = null;
+    if (devolver_deposito && Number(contrato.valor_deposito) > 0 && cda_devolucion_id) {
+      const cda = await entities.CuentaAhorro.get(cda_devolucion_id);
+      const compRes = await createComprobante(entities, {
+        tipo: "diario",
+        fecha: fecha_terminacion || new Date().toISOString().substring(0, 10),
+        descripcion: "Devolución depósito - " + (inmueble?.nombre || ""),
+        movimientos: [
+          {
+            subcuenta: "220513",
+            debito: Number(contrato.valor_deposito),
+            credito: 0,
+            descripcion: "Devolución depósito en garantía",
+            modelo_negocio: "alekerooftop"
+          },
+          {
+            subcuenta: cda.subcuenta_puc,
+            debito: 0,
+            credito: Number(contrato.valor_deposito),
+            descripcion: "Salida devolución depósito",
+            cuenta_ahorro_id: cda_devolucion_id,
+            modelo_negocio: "alekerooftop"
+          }
+        ]
+      });
+      comprobante = compRes?.comprobante;
+    }
+
+    await entities.ContratoArriendo.update(contrato_id, {
+      estado: "terminado",
+      notas: (motivo ? motivo + "\n" : "") + (contrato.notas || "")
+    });
+
+    await entities.Inmueble.update(contrato.inmueble_id, {
+      estado: "disponible",
+      inquilino_id: null
+    });
+
+    const pendientes = await entities.PagoArriendo.filter({ contrato_id, estado: "pendiente" }).catch(() => []);
+    for (const p of (pendientes || [])) {
+      await entities.PagoArriendo.update(p.id, { estado: "condonado" }).catch(() => {});
+    }
+
+    return { success: true, contrato_terminado: contrato_id, comprobante };
+  }
+
+  if (action === "renovarContrato") {
+    const { contrato_id, nuevo_valor_arriendo, nueva_fecha_inicio } = payload;
+    const contratoAnt = await entities.ContratoArriendo.get(contrato_id);
+    if (!contratoAnt) throw new Error("Contrato no encontrado");
+
+    await entities.ContratoArriendo.update(contrato_id, { estado: "renovado" });
+
+    const codigo = await rooftopGenerarCodigoArriendo(entities);
+    const fecha_fin = rooftopAddMonths(nueva_fecha_inicio, 6);
+    const nuevoCanon = Number(nuevo_valor_arriendo) || contratoAnt.valor_arriendo;
+    const valor_deposito = nuevoCanon / 2;
+
+    const nuevoContrato = await entities.ContratoArriendo.create({
+      codigo,
+      inmueble_id: contratoAnt.inmueble_id,
+      inquilino_id: contratoAnt.inquilino_id,
+      fecha_inicio: nueva_fecha_inicio,
+      fecha_fin,
+      duracion_meses: 6,
+      tipo_contrato: contratoAnt.tipo_contrato || "EDIFICIO",
+      valor_arriendo: nuevoCanon,
+      valor_deposito,
+      estado: "vigente",
+      deposito_pagado: false,
+      alertas_enviadas: 0
+    });
+
+    const diaPago = rooftopDiaDesdeFecha(nueva_fecha_inicio);
+    const fecha_vencimiento = rooftopGetPrimerVencimiento(nueva_fecha_inicio, diaPago);
+    const periodo = fecha_vencimiento.substring(0, 7);
+
+    await entities.PagoArriendo.create({
+      inmueble_id: contratoAnt.inmueble_id,
+      contrato_id: nuevoContrato.id,
+      inquilino_id: contratoAnt.inquilino_id,
+      periodo,
+      fecha_vencimiento,
+      valor_esperado: nuevoCanon,
+      valor_pagado: 0,
+      saldo_restante: nuevoCanon,
+      dias_mora: 0,
+      estado: "pendiente"
+    });
+
+    return { success: true, contrato_anterior: contrato_id, contrato_nuevo: nuevoContrato };
+  }
+
   return { success: true, ...payload };
 }
 

@@ -12,9 +12,13 @@ import { formatCOP, hoyLocal } from "@/lib/contabilidad";
 export default function AbonoDepositoDialog({ open, onOpenChange, contrato, inmuebles, onSaved }) {
   const [form, setForm] = useState({ valor: 0, fecha: hoyLocal(), cuentaIngreso: { subcuenta: "", cuenta_ahorro_id: "", producto_credito_id: "" }, notas: "" });
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (open) setForm({ valor: 0, fecha: hoyLocal(), cuentaIngreso: { subcuenta: "", cuenta_ahorro_id: "", producto_credito_id: "" }, notas: "" });
+    if (open) {
+      setForm({ valor: 0, fecha: hoyLocal(), cuentaIngreso: { subcuenta: "", cuenta_ahorro_id: "", producto_credito_id: "" }, notas: "" });
+      setError("");
+    }
   }, [open, contrato]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -24,6 +28,7 @@ export default function AbonoDepositoDialog({ open, onOpenChange, contrato, inmu
   const handleSubmit = async () => {
     if (!form.cuentaIngreso.subcuenta || form.valor <= 0) return;
     setSaving(true);
+    setError("");
     try {
       const resp = await base44.functions.invoke("gestionarRooftop", {
         action: "abonarDeposito",
@@ -37,7 +42,7 @@ export default function AbonoDepositoDialog({ open, onOpenChange, contrato, inmu
       onSaved?.();
       onOpenChange(false);
     } catch (e) {
-      alert("Error: " + (e?.message || "No se pudo registrar el abono"));
+      setError(e?.response?.data?.error || e?.data?.error || e?.message || "No se pudo registrar el abono");
     }
     setSaving(false);
   };
@@ -51,6 +56,11 @@ export default function AbonoDepositoDialog({ open, onOpenChange, contrato, inmu
           <DialogTitle>Abono a Depósito — {contrato.codigo}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
+              {error}
+            </div>
+          )}
           <div className="rounded-md border p-3 space-y-1 text-sm bg-muted/20">
             <div className="flex justify-between"><span className="text-muted-foreground">Inmueble:</span><span className="font-medium">{inmueble?.nombre || "—"}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Depósito:</span><span className="font-bold text-primary">{formatCOP(contrato.valor_deposito)}</span></div>

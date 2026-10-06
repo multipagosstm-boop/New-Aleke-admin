@@ -177,6 +177,144 @@ export function handleRlsViolation(tableName, operation, error) {
   return false;
 }
 
+// Known non-column dispatch keys that should never be sent to SQL insert/update
+const NON_COLUMN_DISPATCH_KEYS = new Set([
+  'action',
+  'accion',
+  '_action',
+  'cda_pago_id',
+  'fecha_deposito',
+  'devolver_deposito',
+  'cda_devolucion_id',
+  'fecha_terminacion',
+  'motivo',
+  'pago_arriendo_id',
+  'cuenta_ingreso',
+  'nueva_fecha_inicio',
+  'nuevo_valor_arriendo',
+  'nuevo_canon',
+  'nueva_fecha_fin'
+]);
+
+// Known column sets for core entities to ensure clean inserts/updates
+const KNOWN_TABLE_COLUMNS = {
+  contrato_arriendo: new Set([
+    'id', 'created_date', 'updated_date', 'created_by_id', 'is_sample',
+    'codigo', 'inmueble_id', 'inquilino_id', 'tipo_contrato',
+    'fecha_inicio', 'fecha_fin', 'duracion_meses', 'valor_arriendo',
+    'valor_deposito', 'estado', 'deposito_pagado', 'comprobante_deposito_id',
+    'documento_pdf_url', 'email_enviado', 'alertas_enviadas', 'notas'
+  ]),
+  pago_arriendo: new Set([
+    'id', 'created_date', 'updated_date', 'created_by_id', 'is_sample',
+    'inmueble_id', 'contrato_id', 'inquilino_id', 'periodo',
+    'fecha_vencimiento', 'fecha_pago_real', 'valor_esperado',
+    'valor_pagado', 'saldo_restante', 'dias_mora', 'estado',
+    'comprobante_id', 'notas'
+  ]),
+  inmueble: new Set([
+    'id', 'created_date', 'updated_date', 'created_by_id', 'is_sample',
+    'nombre', 'descripcion', 'direccion', 'valor_arriendo', 'valor_deposito',
+    'estado', 'inquilino_id', 'tipo_propiedad', 'tipo_contrato', 'notas'
+  ]),
+  inquilino: new Set([
+    'id', 'created_date', 'updated_date', 'created_by_id', 'is_sample',
+    'nombre_completo', 'tipo_documento', 'numero_documento',
+    'lugar_expedicion', 'email', 'telefono', 'estado', 'notas'
+  ]),
+  audit_log: new Set([
+    'id', 'created_date', 'updated_date', 'created_by_id', 'is_sample',
+    'table_name', 'record_id', 'action', 'action_type',
+    'user_id', 'user_email', 'payload', 'metadata'
+  ])
+};
+
+function sanitizePayloadForTable(table, rawPayload) {
+  if (!rawPayload || typeof rawPayload !== 'object') return rawPayload;
+  const sanitized = { ...rawPayload };
+
+  for (const k of Object.keys(sanitized)) {
+    if (NON_COLUMN_DISPATCH_KEYS.has(k)) {
+      delete sanitized[k];
+    }
+  }
+
+  const knownCols = KNOWN_TABLE_COLUMNS[table];
+  if (knownCols) {
+    for (const k of Object.keys(sanitized)) {
+      if (!knownCols.has(k)) {
+        delete sanitized[k];
+      }
+    }
+  }
+
+  return sanitized;
+}
+
+// Global Audit Log Recorder
+export async function recordAuditLog({
+  table,
+  record_id,
+  action,
+  action_type = null,
+  payload = null,
+  metadata = null
+}) {
+  if (!table || table === 'audit_log') return;
+
+  try {
+    const id = `audit_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const now = new Date().toISOString();
+
+    let userEmail = 'sistema@pakredito.com';
+    let userId = 'system';
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('app_user_session');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed?.email) userEmail = parsed.email;
+          if (parsed?.id) userId = parsed.id;
+        }
+      } catch {}
+    }
+
+    const logEntry = {
+      id,
+      created_date: now,
+      updated_date: now,
+      is_sample: false,
+      table_name: table,
+      record_id: record_id ? String(record_id) : null,
+      action: String(action || 'operation'),
+      action_type: action_type ? String(action_type) : String(action || 'operation'),
+      user_id: userId,
+      user_email: userEmail,
+      payload: payload ? (typeof payload === 'object' ? payload : { value: payload }) : null,
+      metadata: metadata ? (typeof metadata === 'object' ? metadata : { info: metadata }) : {}
+    };
+
+    // Keep in memory collection
+    getMemoryCollection('audit_log').set(id, logEntry);
+
+    // Persist in Supabase
+    const client = getSupabase();
+    if (client) {
+      client.from('audit_log').insert([logEntry]).then(({ error }) => {
+        if (error && !error.message?.includes('schema cache')) {
+          console.warn('[AuditLog] Supabase write notice:', error.message);
+        }
+      }).catch(() => {});
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('app-audit-log', { detail: logEntry }));
+    }
+  } catch (err) {
+    console.warn('[AuditLog] Failed to record:', err);
+  }
+}
+
 // Generic entity repository builder
 export function createEntityRepository(entityName) {
   const table = entityToTable(entityName);
@@ -357,9 +495,12 @@ export function createEntityRepository(entityName) {
     },
 
     async create(item) {
+      const explicitAction = item?.action || item?.accion || item?._action || null;
+      const extractedAction = explicitAction ? String(explicitAction) : 'create';
+
       const id = item.id || `gen_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       const now = new Date().toISOString();
-      const payload = {
+      const rawPayload = {
         ...item,
         id,
         created_date: item.created_date || now,
@@ -367,7 +508,17 @@ export function createEntityRepository(entityName) {
         is_sample: item.is_sample ?? false
       };
 
+      const dispatchMetadata = {};
+      for (const k of Object.keys(rawPayload)) {
+        if (NON_COLUMN_DISPATCH_KEYS.has(k)) {
+          dispatchMetadata[k] = rawPayload[k];
+        }
+      }
+
+      const payload = sanitizePayloadForTable(table, rawPayload);
+
       const client = getSupabase();
+      let savedData = null;
       if (client) {
         let attempts = 0;
         let lastError = null;
@@ -376,7 +527,8 @@ export function createEntityRepository(entityName) {
           const { data, error } = await client.from(table).insert([payload]).select().single();
           if (!error && data) {
             getMemoryCollection(table).set(id, data);
-            return data;
+            savedData = data;
+            break;
           }
           lastError = error;
           if (error?.message && error.message.includes('in the schema cache')) {
@@ -389,22 +541,54 @@ export function createEntityRepository(entityName) {
           }
           break;
         }
-        handleRlsViolation(table, 'create', lastError);
-        console.warn(`Supabase insert fallback for ${table}:`, lastError?.message);
+        if (!savedData) {
+          handleRlsViolation(table, 'create', lastError);
+          console.warn(`Supabase insert fallback for ${table}:`, lastError?.message);
+        }
       }
 
-      getMemoryCollection(table).set(id, payload);
-      return payload;
+      if (!savedData) {
+        getMemoryCollection(table).set(id, payload);
+        savedData = payload;
+      }
+
+      // Record in audit log with captured action type
+      recordAuditLog({
+        table,
+        record_id: id,
+        action: extractedAction,
+        action_type: explicitAction || 'create',
+        payload: savedData,
+        metadata: {
+          ...dispatchMetadata,
+          operation: 'create'
+        }
+      });
+
+      return savedData;
     },
 
     async update(id, updates) {
+      const explicitAction = updates?.action || updates?.accion || updates?._action || null;
+      const extractedAction = explicitAction ? String(explicitAction) : 'update';
+
       const now = new Date().toISOString();
-      const payload = {
+      const rawPayload = {
         ...updates,
         updated_date: now
       };
 
+      const dispatchMetadata = {};
+      for (const k of Object.keys(rawPayload)) {
+        if (NON_COLUMN_DISPATCH_KEYS.has(k)) {
+          dispatchMetadata[k] = rawPayload[k];
+        }
+      }
+
+      const payload = sanitizePayloadForTable(table, rawPayload);
+
       const client = getSupabase();
+      let updatedData = null;
       if (client) {
         let attempts = 0;
         let lastError = null;
@@ -414,7 +598,8 @@ export function createEntityRepository(entityName) {
           if (!error && data) {
             const coll = getMemoryCollection(table);
             coll.set(id, { ...coll.get(id), ...data });
-            return data;
+            updatedData = data;
+            break;
           }
           lastError = error;
           if (error?.message && error.message.includes('in the schema cache')) {
@@ -427,15 +612,33 @@ export function createEntityRepository(entityName) {
           }
           break;
         }
-        handleRlsViolation(table, 'update', lastError);
-        console.warn(`Supabase update fallback for ${table}:`, lastError?.message);
+        if (!updatedData) {
+          handleRlsViolation(table, 'update', lastError);
+          console.warn(`Supabase update fallback for ${table}:`, lastError?.message);
+        }
       }
 
-      const coll = getMemoryCollection(table);
-      const existing = coll.get(id) || { id };
-      const updated = { ...existing, ...payload };
-      coll.set(id, updated);
-      return updated;
+      if (!updatedData) {
+        const coll = getMemoryCollection(table);
+        const existing = coll.get(id) || { id };
+        updatedData = { ...existing, ...payload };
+        coll.set(id, updatedData);
+      }
+
+      // Record in audit log with captured action type
+      recordAuditLog({
+        table,
+        record_id: id,
+        action: extractedAction,
+        action_type: explicitAction || 'update',
+        payload: updatedData,
+        metadata: {
+          ...dispatchMetadata,
+          operation: 'update'
+        }
+      });
+
+      return updatedData;
     },
 
     async delete(id) {
@@ -448,6 +651,16 @@ export function createEntityRepository(entityName) {
         }
       }
       getMemoryCollection(table).delete(id);
+
+      recordAuditLog({
+        table,
+        record_id: id,
+        action: 'delete',
+        action_type: 'delete',
+        payload: null,
+        metadata: { operation: 'delete' }
+      });
+
       return { success: true };
     },
 
@@ -473,24 +686,44 @@ export function createEntityRepository(entityName) {
           if (match) coll.delete(id);
         }
       }
+
+      recordAuditLog({
+        table,
+        record_id: 'batch',
+        action: 'deleteMany',
+        action_type: 'deleteMany',
+        payload: null,
+        metadata: { criteria }
+      });
+
       return { success: true };
     },
 
     async bulkCreate(items = []) {
       if (!items.length) return [];
       const now = new Date().toISOString();
-      const prepared = items.map((item, idx) => ({
-        ...item,
-        id: item.id || `gen_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
-        created_date: item.created_date || now,
-        updated_date: now
-      }));
+      const prepared = items.map((item, idx) => {
+        const raw = {
+          ...item,
+          id: item.id || `gen_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+          created_date: item.created_date || now,
+          updated_date: now
+        };
+        return sanitizePayloadForTable(table, raw);
+      });
 
       const client = getSupabase();
       if (client) {
         const { data, error } = await client.from(table).insert(prepared).select();
         if (!error && data) {
           data.forEach(d => getMemoryCollection(table).set(d.id, d));
+          recordAuditLog({
+            table,
+            record_id: `batch_${prepared.length}`,
+            action: 'bulkCreate',
+            action_type: 'bulkCreate',
+            metadata: { count: prepared.length }
+          });
           return data;
         }
         handleRlsViolation(table, 'bulkCreate', error);
@@ -498,6 +731,13 @@ export function createEntityRepository(entityName) {
       }
 
       prepared.forEach(d => getMemoryCollection(table).set(d.id, d));
+      recordAuditLog({
+        table,
+        record_id: `batch_${prepared.length}`,
+        action: 'bulkCreate',
+        action_type: 'bulkCreate',
+        metadata: { count: prepared.length, source: 'memory' }
+      });
       return prepared;
     },
 
@@ -527,6 +767,13 @@ export function createEntityRepository(entityName) {
         await client.from(table).delete().in('id', ids);
       }
       ids.forEach(id => getMemoryCollection(table).delete(id));
+      recordAuditLog({
+        table,
+        record_id: `batch_${ids.length}`,
+        action: 'bulkDelete',
+        action_type: 'bulkDelete',
+        metadata: { idsCount: ids.length }
+      });
       return { success: true };
     }
   };

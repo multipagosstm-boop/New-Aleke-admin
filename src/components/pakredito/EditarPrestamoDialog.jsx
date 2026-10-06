@@ -56,7 +56,7 @@ export default function EditarPrestamoDialog({ open, onOpenChange, onSaved, pres
     const cuotaMan = prestamo.modelo === "cuota_fija" && Number(cuotaManual) > 0 ? Number(cuotaManual) : 0;
     const gen = prestamo.modelo === "cuota_fija"
       ? generarAmortizacionCuotaFija(prestamo.capital, tasaNominal, periodo, numCuotas, fechaPrestamo || prestamo.fecha_prestamo, cuotaMan)
-      : generarAmortizacionMesVencido(prestamo.capital, tasaNominal, numCuotas, fechaPrestamo || prestamo.fecha_prestamo);
+      : generarAmortizacionMesVencido(prestamo.capital, tasaNominal, periodo, numCuotas, fechaPrestamo || prestamo.fecha_prestamo);
     setPreview({ ...gen, tep: tasaEfectivaPeriodo(tasaNominal, periodo) });
   };
 
@@ -160,6 +160,7 @@ export default function EditarPrestamoDialog({ open, onOpenChange, onSaved, pres
                   <Select value={periodo} onValueChange={setPeriodo} disabled={tieneAbonos}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="diaria">Diaria</SelectItem>
                       <SelectItem value="semanal">Semanal</SelectItem>
                       <SelectItem value="quincenal">Quincenal</SelectItem>
                       <SelectItem value="mensual">Mensual</SelectItem>
@@ -167,7 +168,7 @@ export default function EditarPrestamoDialog({ open, onOpenChange, onSaved, pres
                   </Select>
                 </div>
                 <div>
-                  <Label>N° Cuotas (estimado)</Label>
+                  <Label>N° Cuotas *</Label>
                   <NumberInput value={numCuotas} onChange={setNumCuotas} min={1} className="text-right" disabled={tieneAbonos} />
                 </div>
               </>

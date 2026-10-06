@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import { Pencil, Trash2, Wallet, Receipt, Eye, ChevronDown, ChevronUp, ExternalLink, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
 import { formatCOP, formatDate } from "@/lib/contabilidad";
+import { calcularSaldoTotalDeber, generarAmortizacionMesVencido, generarAmortizacionCuotaFija } from "@/lib/pakredito";
 import AmortizacionTable from "@/components/pakredito/AmortizacionTable";
 import EditarPrestamoDialog from "@/components/pakredito/EditarPrestamoDialog";
 import EditarDesembolsoDialog from "@/components/pakredito/EditarDesembolsoDialog";
@@ -58,7 +59,30 @@ export default function PrestamoDetail({
   useEffect(() => {
     if (!open || !currentPrestamo) return;
     base44.entities.CuotaAmortizacion.filter({ prestamo_id: currentPrestamo.id })
-      .then((c) => setCuotas((c || []).sort((a, b) => a.numero - b.numero)))
+      .then((c) => {
+        if (c && c.length > 0) {
+          setCuotas((c || []).sort((a, b) => a.numero - b.numero));
+        } else {
+          // Si no estaban creadas en BD, generar la tabla para que siempre esté disponible
+          const gen = currentPrestamo.modelo === "cuota_fija"
+            ? generarAmortizacionCuotaFija(
+                currentPrestamo.capital,
+                currentPrestamo.tasa_nominal,
+                currentPrestamo.periodo || "mensual",
+                currentPrestamo.numero_cuotas,
+                currentPrestamo.fecha_prestamo,
+                currentPrestamo.cuota_fija
+              )
+            : generarAmortizacionMesVencido(
+                currentPrestamo.capital,
+                currentPrestamo.tasa_nominal,
+                currentPrestamo.periodo || "mensual",
+                currentPrestamo.numero_cuotas,
+                currentPrestamo.fecha_prestamo
+              );
+          setCuotas(gen.schedule || []);
+        }
+      })
       .catch(() => setCuotas([]));
     cargarAbonos();
   }, [open, currentPrestamo?.id]);
@@ -270,18 +294,45 @@ export default function PrestamoDetail({
           </DialogHeader>
 
           <div className="space-y-4">
+            {/* Tarjeta destacada de saldo a deber */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Valor Final Esperado</div>
+                <div className="font-mono text-base font-semibold text-foreground">
+                  {formatCOP(currentPrestamo.total_a_pagar || currentPrestamo.capital)}
+                </div>
+                <div className="text-[10px] text-muted-foreground">Capital: {formatCOP(currentPrestamo.capital)} + Int: {formatCOP(currentPrestamo.total_intereses || 0)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Saldo Total a Deber</div>
+                <div className="font-mono text-lg font-bold text-primary">
+                  {formatCOP(calcularSaldoTotalDeber(currentPrestamo, cuotas))}
+                </div>
+                <div className="text-[10px] text-muted-foreground">Saldo capital pendiente: {formatCOP(currentPrestamo.saldo_capital)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Próximo Vencimiento</div>
+                <div className="font-mono text-sm font-semibold text-foreground">
+                  {formatDate(currentPrestamo.fecha_proximo_pago) || "—"}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Cuota estimada: {formatCOP(currentPrestamo.valor_proximo_pago || 0)}
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
               <Campo label="Cliente" value={clienteNombre} />
-              <Campo label="Modelo" value={currentPrestamo.modelo === "cuota_fija" ? "Cuota Fija" : "Mes Vencido"} />
+              <Campo label="Modelo" value={currentPrestamo.modelo === "cuota_fija" ? "Cuota Fija" : "Cuota Variable"} />
+              <Campo label="Periodo y Plazo" value={`${currentPrestamo.periodo || "mensual"} · ${currentPrestamo.numero_cuotas} cuotas`} />
               <Campo label="Capital" value={formatCOP(currentPrestamo.capital)} />
               <Campo label="Saldo capital" value={formatCOP(currentPrestamo.saldo_capital)} />
               <Campo label="Tasa nominal mens." value={(currentPrestamo.tasa_nominal * 100).toFixed(2) + "%"} />
               <Campo
-                label={`Tasa efectiva ${currentPrestamo.modelo === "cuota_fija" ? (currentPrestamo.periodo || "mensual") : "mensual"}`}
+                label={`Tasa efectiva ${currentPrestamo.periodo || "mensual"}`}
                 value={(currentPrestamo.tasa_efectiva_periodo * 100).toFixed(4) + "%"}
               />
               {currentPrestamo.modelo === "cuota_fija" && <Campo label="Cuota fija" value={formatCOP(currentPrestamo.cuota_fija)} />}
-              <Campo label="N° cuotas" value={currentPrestamo.numero_cuotas} />
               <Campo label="Total intereses" value={formatCOP(currentPrestamo.total_intereses)} />
               <Campo label="Total a pagar" value={formatCOP(currentPrestamo.total_a_pagar)} />
               {currentPrestamo.modelo === "mes_vencido" && (

@@ -39,6 +39,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
   const [generandoPdf, setGenerandoPdf] = useState(false);
   const [contratoCreado, setContratoCreado] = useState(null);
   const [pdfUrl, setPdfUrl] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (open) {
@@ -56,6 +57,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
       setNuevoInq({ nombre_completo: "", tipo_documento: "CC", numero_documento: "", lugar_expedicion: "", email: "", telefono: "" });
       setContratoCreado(null);
       setPdfUrl("");
+      setError("");
     }
   }, [open, inmueblePreselect]);
 
@@ -145,7 +147,7 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
       onOpenChange(false);
     } catch (e) {
       const msg = e?.response?.data?.error || e?.data?.error || e?.error || e?.message || "No se pudo crear el contrato";
-      alert("Error: " + msg);
+      setError(msg);
     }
     setSaving(false);
   };
@@ -157,6 +159,11 @@ export default function ContratoForm({ open, onOpenChange, inmuebles, inquilinos
           <DialogTitle>Nuevo Contrato de Arriendo</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
+              {error}
+            </div>
+          )}
           {/* Inmueble */}
           <div>
             <Label>Inmueble *</Label>

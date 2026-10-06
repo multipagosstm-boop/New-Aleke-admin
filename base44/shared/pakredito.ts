@@ -74,24 +74,64 @@ export function generarAmortizacionCuotaFija(capital, tasaNominal, periodo, nume
   return { cuota, tasa_efectiva_periodo: i, tasa_nominal_derivada: tasaNominalUsada, schedule, totalIntereses, totalAPagar: cuota * numeroCuotas };
 }
 
-export function generarAmortizacionMesVencido(capital, tasaNominal, numeroCuotas, fechaInicio) {
+export function generarAmortizacionMesVencido(capital, tasaNominal, arg3, arg4?, arg5?) {
+  let periodo = "mensual";
+  let numeroCuotas = 1;
+  let fechaInicio = "";
+
+  if (typeof arg3 === "string" && ["diaria", "semanal", "quincenal", "mensual"].includes(arg3)) {
+    periodo = arg3;
+    numeroCuotas = Number(arg4) || 1;
+    fechaInicio = arg5 || "";
+  } else {
+    numeroCuotas = Number(arg3) || 1;
+    fechaInicio = arg4 || "";
+    if (typeof arg5 === "string" && ["diaria", "semanal", "quincenal", "mensual"].includes(arg5)) {
+      periodo = arg5;
+    }
+  }
+
+  const i = tasaEfectivaPeriodo(tasaNominal, periodo);
   const schedule = [];
-  const capBase = capital / numeroCuotas;
+  const capBase = capital / Math.max(1, numeroCuotas);
   let saldo = capital;
+
   for (let n = 1; n <= numeroCuotas; n++) {
-    const interes = saldo * tasaNominal;
+    const interes = saldo * i;
     const cap = n === numeroCuotas ? saldo : capBase;
     saldo -= cap;
     schedule.push({
       numero: n,
-      fecha_vencimiento: sumarPeriodo(fechaInicio, "mensual", n),
+      fecha_vencimiento: sumarPeriodo(fechaInicio, periodo, n),
       cuota: cap + interes, interes, capital_abono: cap,
       saldo_capital: Math.max(0, saldo),
       estado: "pendiente", valor_pagado: 0
     });
   }
   const totalIntereses = schedule.reduce((s, r) => s + r.interes, 0);
-  return { cuota: 0, tasa_efectiva_periodo: tasaNominal, schedule, totalIntereses, totalAPagar: capital + totalIntereses };
+  return { cuota: 0, cuota_inicial: schedule[0]?.cuota || 0, tasa_efectiva_periodo: i, schedule, totalIntereses, totalAPagar: capital + totalIntereses };
+}
+
+export function calcularSaldoTotalDeber(prestamo: any, cuotas: any[] = []) {
+  if (!prestamo) return 0;
+  if (prestamo.estado === "saldado" || (Number(prestamo.saldo_capital) <= 0.01 && !prestamo.saldo_intereses)) {
+    return 0;
+  }
+  if (Array.isArray(cuotas) && cuotas.length > 0) {
+    const pendientes = cuotas.filter((c) => c.estado !== "pagada");
+    if (pendientes.length > 0) {
+      const sumaPendiente = pendientes.reduce(
+        (sum, c) => sum + Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0)),
+        0
+      );
+      return sumaPendiente + (Number(prestamo.saldo_intereses) || 0);
+    }
+  }
+  const totalAPagar = Number(prestamo.total_a_pagar) || (Number(prestamo.capital) + Number(prestamo.total_intereses || 0));
+  const capital = Number(prestamo.capital) || 1;
+  const saldoCapital = Number(prestamo.saldo_capital) || 0;
+  const proporcion = capital > 0 ? (saldoCapital / capital) : 0;
+  return Math.round((totalAPagar * proporcion) + (Number(prestamo.saldo_intereses) || 0));
 }
 
 export function estimarInteresesMesVencido(saldoCapital, tasaNominal, fechaUltimoMovimiento, fechaAbono) {
@@ -156,7 +196,7 @@ export async function crearPrestamo(base44, user, params) {
 
   const gen = modelo === "cuota_fija"
     ? generarAmortizacionCuotaFija(capital, tasa_nominal, periodo, numero_cuotas, fecha_prestamo, cuota_manual)
-    : generarAmortizacionMesVencido(capital, tasa_nominal, numero_cuotas, fecha_prestamo);
+    : generarAmortizacionMesVencido(capital, tasa_nominal, periodo, numero_cuotas, fecha_prestamo);
 
   // Cuando se asignó una cuota fija manual, la tasa nominal se deriva de ella.
   const tasaNominalFinal = (gen as any).tasa_nominal_derivada !== undefined ? (gen as any).tasa_nominal_derivada : tasa_nominal;
@@ -198,12 +238,9 @@ export async function crearPrestamo(base44, user, params) {
     fecha_ultimo_abono: "", notas: notas || ""
   });
 
-  // Solo el modelo de cuota fija persiste el cronograma proyectado.
-  // El modelo mes vencido registra cuotas reales a medida que se abona.
-  if (modelo === "cuota_fija") {
-    const cuotas = gen.schedule.map((c) => ({ ...c, prestamo_id: prestamo.id }));
-    await base44.asServiceRole.entities.CuotaAmortizacion.bulkCreate(cuotas);
-  }
+  // Persistir el cronograma proyectado tanto para cuota fija como para mes vencido
+  const cuotas = gen.schedule.map((c) => ({ ...c, prestamo_id: prestamo.id }));
+  await base44.asServiceRole.entities.CuotaAmortizacion.bulkCreate(cuotas);
 
   return { prestamo, schedule: gen.schedule, warnings, comprobante };
 }
@@ -261,14 +298,27 @@ async function aplicarAbonoMesVencido(base44, prestamo, valorAplicado, intereses
   });
 
   const hoy = new Date().toISOString().substring(0, 10);
-  const proximaFecha = sumarPeriodo(fecha, "mensual", 1);
+  const periodoCredito = prestamo.periodo || "mensual";
+  let proximaFecha = "";
+  if (capitalAplicado <= 0 && intereses > 0) {
+    const baseFecha = prestamo.fecha_proximo_pago && prestamo.fecha_proximo_pago >= fecha ? prestamo.fecha_proximo_pago : fecha;
+    proximaFecha = sumarPeriodo(baseFecha, periodoCredito, 1);
+  } else {
+    proximaFecha = sumarPeriodo(fecha, periodoCredito, 1);
+  }
+  const notaProrroga = (capitalAplicado <= 0 && intereses > 0)
+    ? `Prórroga por pago de intereses (${fecha}): +1 ${periodoCredito} → nuevo vence ${proximaFecha}`
+    : "";
+  const notasFinales = notaProrroga ? (prestamo.notas ? `${prestamo.notas}\n${notaProrroga}` : notaProrroga) : (prestamo.notas || "");
+
   await base44.asServiceRole.entities.Prestamo.update(prestamo.id, {
     saldo_capital: nuevoSaldoCapital,
     saldo_intereses: nuevoSaldoIntereses,
     fecha_ultimo_abono: fecha,
     estado: nuevoSaldoCapital <= 0.01 ? "saldado" : (proximaFecha < hoy ? "en_mora" : "vigente"),
     fecha_proximo_pago: proximaFecha,
-    valor_proximo_pago: nuevoSaldoCapital * prestamo.tasa_nominal
+    valor_proximo_pago: nuevoSaldoCapital * prestamo.tasa_nominal,
+    notas: notasFinales
   });
 }
 

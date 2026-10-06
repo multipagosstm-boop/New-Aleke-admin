@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { HandCoins, Plus, RefreshCw, AlertTriangle, Loader2, Wallet, TrendingUp, Users, Clock, Search, CalendarClock, CalendarPlus, Receipt, Pencil, Eye, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { formatCOP, formatDate, hoyLocal } from "@/lib/contabilidad";
+import { calcularSaldoTotalDeber } from "@/lib/pakredito";
 import PrestamoForm from "@/components/pakredito/PrestamoForm";
 import AbonoPrestamoForm from "@/components/pakredito/AbonoPrestamoForm";
 import PrestamoDetail from "@/components/pakredito/PrestamoDetail";
@@ -44,6 +45,7 @@ export default function Pakredito() {
   const [prorrocaPrestamo, setProrrocaPrestamo] = useState(null);
   const [viewAbono, setViewAbono] = useState(null);
   const [editAbono, setEditAbono] = useState(null);
+  const [filtroEstado, setFiltroEstado] = useState("vigentes"); // "vigentes" | "todos" | "saldados"
   const [busquedaPrestamos, setBusquedaPrestamos] = useState("");
   const [busquedaAbonos, setBusquedaAbonos] = useState("");
   const { toast } = useToast();
@@ -118,9 +120,13 @@ export default function Pakredito() {
   const hoy = hoyLocal();
   const carteraActiva = prestamos.filter((p) => p.estado === "vigente" || p.estado === "en_mora");
   const totalCartera = carteraActiva.reduce((s, p) => s + (p.saldo_capital || 0), 0);
+  const totalSaldoDeberActivo = carteraActiva.reduce((s, p) => s + (calcularSaldoTotalDeber(p) || 0), 0);
   const totalPrestado = prestamos.reduce((s, p) => s + (p.capital || 0), 0);
   const enMora = prestamos.filter((p) => p.estado === "en_mora");
   const clientesActivos = new Set(carteraActiva.map((p) => p.cliente_id)).size;
+
+  const countActivos = useMemo(() => prestamos.filter((p) => p.estado !== "saldado").length, [prestamos]);
+  const countSaldados = useMemo(() => prestamos.filter((p) => p.estado === "saldado").length, [prestamos]);
 
   const proximosPagos = useMemo(
     () => carteraActiva.filter((p) => p.fecha_proximo_pago).sort((a, b) => a.fecha_proximo_pago.localeCompare(b.fecha_proximo_pago)),
@@ -138,10 +144,16 @@ export default function Pakredito() {
 
   const normalizar = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const prestamosFiltrados = useMemo(() => {
-    if (!busquedaPrestamos.trim()) return prestamos;
+    let list = prestamos;
+    if (filtroEstado === "vigentes") {
+      list = list.filter((p) => p.estado !== "saldado");
+    } else if (filtroEstado === "saldados") {
+      list = list.filter((p) => p.estado === "saldado");
+    }
+    if (!busquedaPrestamos.trim()) return list;
     const q = normalizar(busquedaPrestamos);
-    return prestamos.filter((p) => normalizar(clienteNombre(p.cliente_id)).includes(q) || normalizar(p.codigo).includes(q));
-  }, [prestamos, busquedaPrestamos, clientes]);
+    return list.filter((p) => normalizar(clienteNombre(p.cliente_id)).includes(q) || normalizar(p.codigo).includes(q));
+  }, [prestamos, busquedaPrestamos, filtroEstado, clientes]);
 
   const abonosFiltrados = useMemo(() => {
     if (!busquedaAbonos.trim()) return abonos;
@@ -181,9 +193,10 @@ export default function Pakredito() {
       </div>
 
       {/* Resumen */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <CardStat icon={TrendingUp} label="Total prestado" value={formatCOP(totalPrestado)} />
-        <CardStat icon={Wallet} label="Cartera activa" value={formatCOP(totalCartera)} tone="primary" />
+        <CardStat icon={Wallet} label="Cartera (Saldo Capital)" value={formatCOP(totalCartera)} tone="primary" />
+        <CardStat icon={Receipt} label="Saldo total a deber" value={formatCOP(totalSaldoDeberActivo)} tone="primary" />
         <CardStat icon={Users} label="Clientes activos" value={clientesActivos} />
         <CardStat icon={AlertTriangle} label="En mora" value={enMora.length} tone={enMora.length ? "destructive" : ""} />
       </div>
@@ -327,38 +340,99 @@ export default function Pakredito() {
         </TabsContent>
 
         <TabsContent value="prestamos" className="space-y-3">
-          <div className="relative max-w-sm">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input value={busquedaPrestamos} onChange={(e) => setBusquedaPrestamos(e.target.value)} placeholder="Buscar por cliente o código..." className="pl-9" />
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="relative max-w-sm flex-1">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={busquedaPrestamos}
+                onChange={(e) => setBusquedaPrestamos(e.target.value)}
+                placeholder="Buscar por cliente o código..."
+                className="pl-9"
+              />
+            </div>
+            {/* Filtro: Solo vigentes (oculta los saldados), Todos, o Solo saldados */}
+            <div className="flex items-center gap-1.5 p-1 bg-muted/60 rounded-lg border text-xs">
+              <button
+                type="button"
+                onClick={() => setFiltroEstado("vigentes")}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                  filtroEstado === "vigentes"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Solo vigentes ({countActivos})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFiltroEstado("todos")}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                  filtroEstado === "todos"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Todos ({prestamos.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFiltroEstado("saldados")}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                  filtroEstado === "saldados"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Saldados ({countSaldados})
+              </button>
+            </div>
           </div>
+
           <Card>
             <CardContent className="p-0 overflow-x-auto">
               <table className="w-full text-sm thead-sticky">
-                <thead className="border-b text-left text-xs text-muted-foreground uppercase">
+                <thead className="border-b text-left text-xs text-muted-foreground uppercase bg-muted/40">
                   <tr>
                     <th className="px-3 py-2 font-medium">Código</th>
                     <th className="px-3 py-2 font-medium">Cliente</th>
-                    <th className="px-3 py-2 font-medium">Modelo</th>
+                    <th className="px-3 py-2 font-medium">Modelo / Plazo</th>
                     <th className="px-3 py-2 font-medium text-right">Capital</th>
-                    <th className="px-3 py-2 font-medium text-right">Saldo</th>
-                    <th className="px-3 py-2 font-medium">Fecha</th>
+                    <th className="px-3 py-2 font-medium text-right">Total Esperado</th>
+                    <th className="px-3 py-2 font-medium text-right text-primary font-bold">Saldo a Deber</th>
+                    <th className="px-3 py-2 font-medium text-right">Saldo Capital</th>
+                    <th className="px-3 py-2 font-medium">Próx. Venc.</th>
                     <th className="px-3 py-2 font-medium text-center">Estado</th>
                     <th className="px-3 py-2 font-medium w-10"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {prestamosFiltrados.length === 0 ? (
-                    <tr><td colSpan={8} className="px-3 py-4 text-center text-muted-foreground text-sm">Sin préstamos registrados.</td></tr>
+                    <tr>
+                      <td colSpan={10} className="px-3 py-6 text-center text-muted-foreground text-sm">
+                        {filtroEstado === "vigentes"
+                          ? "No hay préstamos vigentes o en mora coincidentes."
+                          : "Sin préstamos registrados."}
+                      </td>
+                    </tr>
                   ) : prestamosFiltrados.map((p) => (
                     <tr key={p.id} className="border-b border-border/50 hover:bg-muted/30 cursor-pointer" onClick={() => setDetailPrestamo(p)}>
-                      <td className="px-3 py-1.5 font-mono text-xs">{p.codigo}</td>
-                      <td className="px-3 py-1.5">{clienteNombre(p.cliente_id)}</td>
-                      <td className="px-3 py-1.5 text-xs">{p.modelo === "cuota_fija" ? "Cuota fija" : "Mes vencido"}</td>
-                      <td className="px-3 py-1.5 text-right font-mono">{formatCOP(p.capital)}</td>
-                      <td className="px-3 py-1.5 text-right font-mono">{formatCOP(p.saldo_capital)}</td>
-                      <td className="px-3 py-1.5 font-mono text-xs">{formatDate(p.fecha_prestamo)}</td>
-                      <td className="px-3 py-1.5 text-center"><Badge variant={ESTADO_VARIANT[p.estado]} className="text-[10px]">{p.estado}</Badge></td>
-                      <td className="px-3 py-1.5 text-center">
+                      <td className="px-3 py-2 font-mono text-xs font-semibold">{p.codigo}</td>
+                      <td className="px-3 py-2 font-medium">{clienteNombre(p.cliente_id)}</td>
+                      <td className="px-3 py-2 text-xs">
+                        <div className="font-medium text-foreground">{p.modelo === "cuota_fija" ? "Cuota fija" : "Cuota variable"}</div>
+                        <div className="text-[10px] text-muted-foreground capitalize">
+                          {p.periodo || "mensual"} · {p.numero_cuotas} cuota{p.numero_cuotas > 1 ? "s" : ""}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono">{formatCOP(p.capital)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">{formatCOP(p.total_a_pagar || p.capital)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-primary">
+                        {formatCOP(calcularSaldoTotalDeber(p))}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">{formatCOP(p.saldo_capital)}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{formatDate(p.fecha_proximo_pago) || "—"}</td>
+                      <td className="px-3 py-2 text-center"><Badge variant={ESTADO_VARIANT[p.estado]} className="text-[10px]">{p.estado}</Badge></td>
+                      <td className="px-3 py-2 text-center">
                         <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-destructive/10"
                           onClick={(e) => { e.stopPropagation(); setDeletePrestamoTarget(p); }} title="Eliminar préstamo">
                           <Trash2 className="w-3.5 h-3.5" />

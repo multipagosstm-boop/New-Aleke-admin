@@ -49,7 +49,7 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
   // La contrapartida 120506 (Pakredito) la agrega el backend automáticamente en el débito.
   const capital = movimientos.reduce((s, m) => s + (Number(m.credito) || 0), 0);
 
-  const periodoLabel = modelo === "cuota_fija" ? PERIODO_LABEL[periodo] : "mensual";
+  const periodoLabel = PERIODO_LABEL[periodo] || "mensual";
 
   const generarPreview = () => {
     setError("");
@@ -61,7 +61,7 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
     if (!numCuotas || numCuotas < 1) { setError("Ingrese número de cuotas válido"); return; }
     const gen = modelo === "cuota_fija"
       ? generarAmortizacionCuotaFija(capital, tasaNominal, periodo, numCuotas, fecha, cuotaMan)
-      : generarAmortizacionMesVencido(capital, tasaNominal, numCuotas, fecha);
+      : generarAmortizacionMesVencido(capital, tasaNominal, periodo, numCuotas, fecha);
     const tasaNominalFinal = gen.tasa_nominal_derivada !== undefined ? gen.tasa_nominal_derivada : tasaNominal;
     setPreview({ ...gen, modelo, tasaNominal: tasaNominalFinal, tep: gen.tasa_efectiva_periodo, cuotaManual: cuotaMan });
   };
@@ -154,20 +154,18 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
               <Label>Tasa nominal mensual (%) {modelo === "cuota_fija" && Number(cuotaManual) > 0 ? "(opcional)" : "*"}</Label>
               <NumberInput value={tasaPct} onChange={setTasaPct} step="0.1" className="text-right" />
             </div>
-            {modelo === "cuota_fija" && (
-              <div>
-                <Label>Periodo *</Label>
-                <Select value={periodo} onValueChange={setPeriodo}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="diaria">Diaria</SelectItem>
-                    <SelectItem value="semanal">Semanal</SelectItem>
-                    <SelectItem value="quincenal">Quincenal</SelectItem>
-                    <SelectItem value="mensual">Mensual</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <div>
+              <Label>Periodo *</Label>
+              <Select value={periodo} onValueChange={setPeriodo}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="diaria">Diaria</SelectItem>
+                  <SelectItem value="semanal">Semanal</SelectItem>
+                  <SelectItem value="quincenal">Quincenal</SelectItem>
+                  <SelectItem value="mensual">Mensual</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div>
               <Label>N° Cuotas *</Label>
               <NumberInput value={numCuotas} onChange={setNumCuotas} min={1} className="text-right" />
@@ -236,9 +234,9 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
           {preview && (
             <div className="space-y-3 border-t pt-3">
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
-                <Resumen label="Cuota fija" value={modelo === "cuota_fija" ? formatCOP(preview.cuota) : "Variable"} />
+                <Resumen label={modelo === "cuota_fija" ? "Cuota fija" : "Cuota inicial"} value={modelo === "cuota_fija" ? formatCOP(preview.cuota) : formatCOP(preview.schedule[0]?.cuota)} />
                 <Resumen label="Total intereses" value={formatCOP(preview.totalIntereses)} />
-                <Resumen label="Total a pagar" value={formatCOP(preview.totalAPagar)} />
+                <Resumen label="Total a pagar (esperado)" value={formatCOP(preview.totalAPagar)} />
                 <Resumen label={`Tasa efectiva ${periodoLabel}`} value={(preview.tep * 100).toFixed(4) + "%"} />
                 <Resumen label="Tasa nominal mensual" value={(preview.tasaNominal * 100).toFixed(4) + "%"} />
               </div>
@@ -247,8 +245,8 @@ export default function PrestamoForm({ open, onOpenChange, onSaved, clientes, pu
               </div>
               <p className="text-[11px] text-muted-foreground">
                 {modelo === "cuota_fija"
-                  ? "Intereses compuestos generados de forma anticipada. Los abonos prematuros no reducen los intereses."
-                  : "Cronograma estimado (interés simple mensual). Los intereses reales se causan al momento del abono según días transcurridos."}
+                  ? "Cuotas fijas iguales durante todo el plazo con tabla de amortización pre-generada."
+                  : `Cuotas variables (${periodoLabel}): amortización de capital uniforme (${formatCOP(capital / numCuotas)}) + intereses sobre saldos. Si únicamente paga intereses, se prorroga automáticamente al siguiente plazo.`}
               </p>
             </div>
           )}

@@ -7,8 +7,8 @@ import { AlertCircle, Loader2, Wallet } from "lucide-react";
 import SearchableSelect from "@/components/ui/searchable-select";
 import { NumberInput } from "@/components/ui/number-input";
 import CuentaIngresoSelect from "@/components/admin/CuentaIngresoSelect";
-import { formatCOP, hoyLocal } from "@/lib/contabilidad";
-import { estimarInteresesMesVencido, proyectarAbonoCuotaFija } from "@/lib/pakredito";
+import { formatCOP, formatDate, hoyLocal } from "@/lib/contabilidad";
+import { estimarInteresesMesVencido, proyectarAbonoCuotaFija, sumarPeriodo, calcularSaldoTotalDeber } from "@/lib/pakredito";
 
 export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, clientes, prestamos }) {
   const [clienteId, setClienteId] = useState("");
@@ -174,48 +174,81 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
                       <div key={p.id} className="p-2 space-y-2">
                         <div className="flex items-center gap-2 flex-wrap">
                           <input type="checkbox" checked={sel} onChange={() => toggleCredito(p)} className="h-4 w-4" />
-                          <span className="text-sm font-medium">{p.codigo}</span>
-                          {p.modelo === "cuota_fija" && cuotaActual && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">Cuota actual: {cuotaActual.numero}</span>
+                          <span className="text-sm font-semibold">{p.codigo}</span>
+                          {cuotaActual && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
+                              Cuota {cuotaActual.numero} de {p.numero_cuotas || cuotas.length || 1}
+                            </span>
                           )}
-                          <span className="text-xs text-muted-foreground ml-auto">Saldo: {formatCOP(p.saldo_capital)}</span>
-                          <span className="text-xs text-muted-foreground">{p.modelo === "cuota_fija" ? `Cuota: ${formatCOP(p.cuota_fija)}` : "Mes vencido"}</span>
+                          <span className="text-xs font-medium text-foreground ml-auto">
+                            Saldo a deber: <b className="font-mono text-primary">{formatCOP(calcularSaldoTotalDeber(p, cuotas))}</b>
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            (Cap: {formatCOP(p.saldo_capital)})
+                          </span>
+                          <span className="text-xs text-muted-foreground capitalize">
+                            {p.modelo === "cuota_fija" ? `Fija: ${formatCOP(p.cuota_fija)}` : `Variable (${p.periodo || "mensual"})`}
+                          </span>
                         </div>
                         {sel && (
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pl-2 sm:pl-6">
-                            <div>
-                              <Label className="text-[10px] uppercase">Abono a este crédito</Label>
-                              <NumberInput value={aplicaciones[p.id]} onChange={(v) => setAplicacion(p.id, v)} className="h-8 text-xs text-right" />
+                          <div className="space-y-2 pl-2 sm:pl-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                              <div>
+                                <Label className="text-[10px] uppercase">Abono a este crédito</Label>
+                                <NumberInput value={aplicaciones[p.id]} onChange={(v) => setAplicacion(p.id, v)} className="h-8 text-xs text-right" />
+                              </div>
+                              {p.modelo === "mes_vencido" && (
+                                <>
+                                  <div>
+                                    <div className="flex items-center justify-between">
+                                      <Label className="text-[10px] uppercase">Intereses a cobrar</Label>
+                                      {estim.intereses > 0 && (
+                                        <button
+                                          type="button"
+                                          className="text-[9px] text-primary hover:underline font-medium"
+                                          onClick={() => {
+                                            const valInt = Math.round(estim.intereses);
+                                            setAplicacion(p.id, valInt);
+                                            setInteres(p.id, valInt);
+                                          }}
+                                        >
+                                          Solo interés
+                                        </button>
+                                      )}
+                                    </div>
+                                    <NumberInput value={interesesInput[p.id] || 0} onChange={(v) => setInteres(p.id, v)} className="h-8 text-xs text-right" />
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground self-end pb-1">
+                                    Estimado: {estim.dias}d → {formatCOP(estim.intereses)}<br />
+                                    <span><b className="text-foreground">→ Capital: {formatCOP(capitalMesVencido)}</b></span><br />
+                                    <span className="text-[9px]">(T/30·D·C){estim.dias === 0 ? " · 0 días → intereses en 0" : " · editable"}</span>
+                                  </div>
+                                </>
+                              )}
+                              {p.modelo === "cuota_fija" && (
+                                <>
+                                  <div>
+                                    <Label className="text-[10px] uppercase">Intereses a cobrar</Label>
+                                    <NumberInput
+                                      value={interesesInput[p.id] ?? interesProyectado}
+                                      onChange={(v) => setInteres(p.id, v)}
+                                      className="h-8 text-xs text-right"
+                                    />
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground self-end pb-1 space-y-0.5">
+                                    <div>Estimado (según cuota): <span className="font-mono">{formatCOP(interesProyectado)}</span></div>
+                                    <div><b className="text-foreground">→ Capital: {formatCOP(Math.max(0, Number(aplicaciones[p.id]) - (interesesInput[p.id] ?? interesProyectado)))}</b></div>
+                                    <div className="text-[9px]">Editable: ajuste si necesita la última palabra</div>
+                                  </div>
+                                </>
+                              )}
                             </div>
-                            {p.modelo === "mes_vencido" && (
-                              <>
-                                <div>
-                                  <Label className="text-[10px] uppercase">Intereses a cobrar</Label>
-                                  <NumberInput value={interesesInput[p.id] || 0} onChange={(v) => setInteres(p.id, v)} className="h-8 text-xs text-right" />
-                                </div>
-                                <div className="text-[10px] text-muted-foreground self-end pb-1">
-                                  Estimado: {estim.dias}d → {formatCOP(estim.intereses)}<br />
-                                  <span><b className="text-foreground">→ Capital: {formatCOP(capitalMesVencido)}</b></span><br />
-                                  <span className="text-[9px]">(T/30·D·C){estim.dias === 0 ? " · 0 días → intereses en 0" : " · puede dejar en 0"}</span>
-                                </div>
-                              </>
-                            )}
-                            {p.modelo === "cuota_fija" && (
-                              <>
-                                <div>
-                                  <Label className="text-[10px] uppercase">Intereses a cobrar</Label>
-                                  <NumberInput
-                                    value={interesesInput[p.id] ?? interesProyectado}
-                                    onChange={(v) => setInteres(p.id, v)}
-                                    className="h-8 text-xs text-right"
-                                  />
-                                </div>
-                                <div className="text-[10px] text-muted-foreground self-end pb-1 space-y-0.5">
-                                  <div>Estimado (según cuota): <span className="font-mono">{formatCOP(interesProyectado)}</span></div>
-                                  <div><b className="text-foreground">→ Capital: {formatCOP(Math.max(0, Number(aplicaciones[p.id]) - (interesesInput[p.id] ?? interesProyectado)))}</b></div>
-                                  <div className="text-[9px]">Editable: ajuste si necesita la última palabra</div>
-                                </div>
-                              </>
+
+                            {/* Aviso de Prórroga por pago de solo intereses en cuota variable */}
+                            {p.modelo === "mes_vencido" && Number(aplicaciones[p.id]) > 0 && capitalMesVencido <= 0 && Number(interesesInput[p.id] || 0) > 0 && (
+                              <div className="rounded-md bg-amber-500/10 border border-amber-500/30 p-2 text-xs text-amber-800 dark:text-amber-300">
+                                <b>ℹ️ Pago de solo intereses:</b> El capital ({formatCOP(p.saldo_capital)}) se mantiene intacto y el crédito se <b>prorrogará automáticamente</b> hasta el siguiente plazo ({formatDate(sumarPeriodo(p.fecha_proximo_pago || fecha, p.periodo || "mensual", 1))}).
+                              </div>
                             )}
                           </div>
                         )}
