@@ -62,7 +62,7 @@ export function generarAmortizacionCuotaFija(capital, tasaNominal, periodo, nume
     saldo -= cap;
     schedule.push({
       numero: n, fecha_vencimiento: sumarPeriodo(fechaInicio, periodo, n),
-      cuota, interes, capital_abono: cap, saldo_capital: Math.max(0, saldo),
+      cuota, interes, capital_abono: cap, otros_cobros: 0, cobro_extra: 0, saldo_capital: Math.max(0, saldo),
       estado: "pendiente", valor_pagado: 0
     });
   }
@@ -102,6 +102,8 @@ export function generarAmortizacionMesVencido(capital, tasaNominal, arg3, arg4, 
       cuota: cap + interes,
       interes,
       capital_abono: cap,
+      otros_cobros: 0,
+      cobro_extra: 0,
       saldo_capital: Math.max(0, saldo),
       estado: "pendiente",
       valor_pagado: 0
@@ -152,28 +154,218 @@ export function proyectarAbonoCuotaFija(cuotas, valorAplicado) {
   return { intereses, capital, exceso };
 }
 
-// Calcula el Saldo Total a Deber (valor final pendiente por pagar)
-export function calcularSaldoTotalDeber(prestamo, cuotas = []) {
+// Calcula el Saldo Total a Deber (valor real a deber según contabilidad: capital pendiente + intereses generados)
+export function calcularSaldoTotalDeber(prestamo) {
   if (!prestamo) return 0;
-  if (prestamo.estado === "saldado" || (Number(prestamo.saldo_capital) <= 0.01 && !prestamo.saldo_intereses)) {
+  if (prestamo.estado === "saldado" || Number(prestamo.saldo_capital) <= 0.01) {
     return 0;
   }
+  // En contabilidad, el saldo real a deber corresponde al saldo de capital pendiente
+  // más los intereses causados/generados pendientes de cobro registrados.
+  // El "saldo esperado" del cronograma inicial es una proyección que incluye intereses futuros no causados.
+  const cap = Math.max(0, Number(prestamo.saldo_capital) || 0);
+  const int = Math.max(0, Number(prestamo.saldo_intereses) || 0);
+  return Math.round(cap + int);
+}
 
-  if (Array.isArray(cuotas) && cuotas.length > 0) {
-    const pendientes = cuotas.filter((c) => c.estado !== "pagada");
-    if (pendientes.length > 0) {
-      const sumaPendiente = pendientes.reduce(
-        (sum, c) => sum + Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0)),
-        0
-      );
-      return sumaPendiente + (Number(prestamo.saldo_intereses) || 0);
+const parseDetHelper = (d) => {
+  if (Array.isArray(d)) return d;
+  if (typeof d === "string") {
+    try { return JSON.parse(d); } catch { return []; }
+  }
+  if (typeof d === "object" && d !== null) return [d];
+  return [];
+};
+
+// Reconcilia el estado exacto de cada cuota a partir de la lista real de abonos aplicados al crédito.
+// Garantiza que la amortización refleje 1:1 los abonos existentes, recalculando saldos reales y futuros.
+export function reconciliarCuotasConAbonos(cuotasOriginales = [], abonos = [], prestamo = {}) {
+  if (!cuotasOriginales || cuotasOriginales.length === 0) return [];
+
+  const pId = prestamo?.id ? String(prestamo.id).trim() : "";
+  const pCodigo = prestamo?.codigo ? String(prestamo.codigo).trim().toLowerCase() : "";
+  const capitalInicial = Number(prestamo?.capital) || 0;
+
+  // Resetear cuotas a base limpia
+  const cuotas = cuotasOriginales.map((c) => ({
+    ...c,
+    valor_pagado: 0,
+    otros_cobros: 0,
+    cobro_extra: 0,
+    estado: "pendiente",
+    fecha_pago: null,
+    abono_id: null
+  })).sort((a, b) => a.numero - b.numero);
+
+  // Ordenar abonos cronológicamente (más antiguo primero)
+  const abonosOrdenados = [...(abonos || [])].sort((a, b) => {
+    const cmp = (a.fecha || "").localeCompare(b.fecha || "");
+    if (cmp !== 0) return cmp;
+    return (a.created_date || "").localeCompare(b.created_date || "");
+  });
+
+  // Calcular capital total abonado en los registros reales
+  let totalCapitalAbonado = 0;
+  for (const ab of abonosOrdenados) {
+    const dList = parseDetHelper(ab.detalles);
+    const d = dList.find((x) =>
+      (pId && String(x.prestamo_id).trim() === pId) ||
+      (pCodigo && x.codigo && String(x.codigo).trim().toLowerCase() === pCodigo)
+    );
+    if (!d) continue;
+    const val = Number(d.valor_aplicado) || 0;
+    const intVal = Number(d.intereses) || 0;
+    const extraVal = Number(d.otros_cobros) || 0;
+    const capVal = d.capital !== undefined ? Number(d.capital) : Math.max(0, val - intVal - extraVal);
+    totalCapitalAbonado += capVal;
+  }
+
+  const estaSaldado = prestamo?.estado === "saldado" || (capitalInicial > 0 && totalCapitalAbonado >= capitalInicial - 1);
+
+  for (const ab of abonosOrdenados) {
+    const dList = parseDetHelper(ab.detalles);
+    const d = dList.find((x) =>
+      (pId && String(x.prestamo_id).trim() === pId) ||
+      (pCodigo && x.codigo && String(x.codigo).trim().toLowerCase() === pCodigo)
+    );
+    if (!d) continue;
+
+    const valorAplicado = Number(d.valor_aplicado) || 0;
+    if (valorAplicado <= 0) continue;
+
+    const cobroMas = Boolean(d.cobro_intereses_de_mas);
+    const otrosCobros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
+    const fechaAbono = ab.fecha || null;
+    const abonoId = ab.id || null;
+
+    // Buscar la cuota objetivo
+    let targetCuota = null;
+    if (d.cuota_id) targetCuota = cuotas.find((c) => String(c.id) === String(d.cuota_id));
+    if (!targetCuota && d.cuota_numero) targetCuota = cuotas.find((c) => Number(c.numero) === Number(d.cuota_numero));
+    if (!targetCuota || targetCuota.estado === "pagada") {
+      targetCuota = cuotas.find((c) => c.estado !== "pagada") || cuotas[cuotas.length - 1];
+    }
+    if (!targetCuota) continue;
+
+    if (cobroMas && otrosCobros > 0) {
+      const faltaOrd = Math.max(0, (Number(targetCuota.cuota) || 0) - (Number(targetCuota.valor_pagado) || 0));
+      const pagoOrd = Math.min(valorAplicado, faltaOrd);
+      let rem = valorAplicado - pagoOrd;
+      const asignableExtra = Math.min(rem, otrosCobros);
+      rem -= asignableExtra;
+
+      targetCuota.otros_cobros = (Number(targetCuota.otros_cobros) || 0) + asignableExtra;
+      targetCuota.cobro_extra = targetCuota.otros_cobros;
+      targetCuota.valor_pagado = (Number(targetCuota.valor_pagado) || 0) + pagoOrd + asignableExtra;
+
+      const pagadoSinExtra = targetCuota.valor_pagado - targetCuota.otros_cobros;
+      targetCuota.estado = pagadoSinExtra >= ((Number(targetCuota.cuota) || 0) - 0.01) ? "pagada" : (targetCuota.valor_pagado > 0 ? "parcial" : "pendiente");
+      targetCuota.fecha_pago = fechaAbono;
+      targetCuota.abono_id = abonoId;
+
+      if (rem > 0) {
+        for (const sig of cuotas) {
+          if (sig.numero <= targetCuota.numero || sig.estado === "pagada" || rem <= 0) continue;
+          const fSig = Math.max(0, (Number(sig.cuota) || 0) - (Number(sig.valor_pagado) || 0));
+          if (fSig <= 0) continue;
+          const pSig = Math.min(rem, fSig);
+          sig.valor_pagado = (Number(sig.valor_pagado) || 0) + pSig;
+          sig.estado = sig.valor_pagado >= ((Number(sig.cuota) || 0) - 0.01) ? "pagada" : "parcial";
+          sig.fecha_pago = fechaAbono;
+          sig.abono_id = abonoId;
+          rem -= pSig;
+        }
+        if (rem > 0) {
+          const ult = cuotas[cuotas.length - 1];
+          if (ult) {
+            ult.valor_pagado = (Number(ult.valor_pagado) || 0) + rem;
+            rem = 0;
+          }
+        }
+      }
+    } else {
+      let rem = valorAplicado;
+      const faltaOrd = Math.max(0, (Number(targetCuota.cuota) || 0) - (Number(targetCuota.valor_pagado) || 0));
+      const pago = Math.min(rem, faltaOrd);
+      targetCuota.valor_pagado = (Number(targetCuota.valor_pagado) || 0) + pago;
+      targetCuota.estado = targetCuota.valor_pagado >= ((Number(targetCuota.cuota) || 0) - 0.01) ? "pagada" : (targetCuota.valor_pagado > 0 ? "parcial" : "pendiente");
+      targetCuota.fecha_pago = fechaAbono;
+      targetCuota.abono_id = abonoId;
+      rem -= pago;
+
+      if (rem > 0) {
+        for (const sig of cuotas) {
+          if (sig.numero <= targetCuota.numero || sig.estado === "pagada" || rem <= 0) continue;
+          const fSig = Math.max(0, (Number(sig.cuota) || 0) - (Number(sig.valor_pagado) || 0));
+          if (fSig <= 0) continue;
+          const pSig = Math.min(rem, fSig);
+          sig.valor_pagado = (Number(sig.valor_pagado) || 0) + pSig;
+          sig.estado = sig.valor_pagado >= ((Number(sig.cuota) || 0) - 0.01) ? "pagada" : "parcial";
+          sig.fecha_pago = fechaAbono;
+          sig.abono_id = abonoId;
+          rem -= pSig;
+        }
+        if (rem > 0) {
+          const ult = cuotas[cuotas.length - 1];
+          if (ult) {
+            ult.valor_pagado = (Number(ult.valor_pagado) || 0) + rem;
+            rem = 0;
+          }
+        }
+      }
     }
   }
 
-  // Fallback si no hay cuotas cargadas: proporcional al capital o total_a_pagar
-  const totalAPagar = Number(prestamo.total_a_pagar) || (Number(prestamo.capital) + Number(prestamo.total_intereses || 0));
-  const capital = Number(prestamo.capital) || 1;
-  const saldoCapital = Number(prestamo.saldo_capital) || 0;
-  const proporcion = capital > 0 ? (saldoCapital / capital) : 0;
-  return Math.round((totalAPagar * proporcion) + (Number(prestamo.saldo_intereses) || 0));
+  // Si el préstamo fue saldado (o el capital abonado cubrió el 100% del capital prestado),
+  // todas las cuotas quedan saldadas/pagadas sin arrastrar deudas teóricas de intereses condonados
+  if (estaSaldado) {
+    for (const c of cuotas) {
+      c.estado = "pagada";
+      c.saldo_capital = 0;
+    }
+    return cuotas;
+  }
+
+  // Si el préstamo NO está saldado pero todas las cuotas quedaron marcadas como pagadas
+  // (por ejemplo, préstamos de 1 sola cuota donde se abonó parte del crédito),
+  // la cuota debe permanecer activa (parcial) porque el cliente aún debe dicha cuota/préstamo.
+  const hayPendiente = cuotas.some((c) => c.estado !== "pagada");
+  if (!hayPendiente && cuotas.length > 0) {
+    const ult = cuotas[cuotas.length - 1];
+    ult.estado = (Number(ult.valor_pagado) || 0) > 0 ? "parcial" : "pendiente";
+  }
+
+  // Recalcular saldo_capital dinámico y real para cada fila de la tabla de amortización
+  let saldoVivo = capitalInicial > 0 ? capitalInicial : (Number(cuotas[0]?.saldo_capital) || 0);
+
+  for (let i = 0; i < cuotas.length; i++) {
+    const c = cuotas[i];
+    const isLast = i === cuotas.length - 1;
+
+    if (c.estado === "pagada") {
+      const extra = Number(c.otros_cobros || c.cobro_extra) || 0;
+      const pagadoOrd = Math.max(0, (Number(c.valor_pagado) || 0) - extra);
+      const interesOrd = Number(c.interes) || 0;
+      const capAbonado = Math.max(Number(c.capital_abono) || 0, pagadoOrd - interesOrd);
+      saldoVivo = Math.max(0, saldoVivo - capAbonado);
+      c.saldo_capital = Math.round(saldoVivo);
+    } else if (c.estado === "parcial") {
+      if (isLast && !estaSaldado) {
+        c.saldo_capital = Math.max(0, Math.round(capitalInicial - totalCapitalAbonado));
+      } else {
+        const extra = Number(c.otros_cobros || c.cobro_extra) || 0;
+        const pagadoOrd = Math.max(0, (Number(c.valor_pagado) || 0) - extra);
+        const interesOrd = Number(c.interes) || 0;
+        const capAbonado = Math.max(0, pagadoOrd - interesOrd);
+        saldoVivo = Math.max(0, saldoVivo - capAbonado);
+        c.saldo_capital = Math.round(saldoVivo);
+      }
+    } else {
+      // Cuota pendiente: saldo proyectado si se paga el capital previsto de esta cuota
+      saldoVivo = Math.max(0, saldoVivo - (Number(c.capital_abono) || 0));
+      c.saldo_capital = Math.round(saldoVivo);
+    }
+  }
+
+  return cuotas;
 }

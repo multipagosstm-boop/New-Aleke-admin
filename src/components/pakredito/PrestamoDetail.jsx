@@ -4,15 +4,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
-import { Pencil, Trash2, Wallet, Receipt, Eye, ChevronDown, ChevronUp, ExternalLink, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Pencil, Trash2, Wallet, Receipt, Eye, ChevronDown, ChevronUp, ExternalLink, Loader2, CheckCircle2, AlertTriangle, CalendarPlus } from "lucide-react";
 import { formatCOP, formatDate } from "@/lib/contabilidad";
-import { calcularSaldoTotalDeber, generarAmortizacionMesVencido, generarAmortizacionCuotaFija } from "@/lib/pakredito";
+import { calcularSaldoTotalDeber, generarAmortizacionMesVencido, generarAmortizacionCuotaFija, reconciliarCuotasConAbonos } from "@/lib/pakredito";
 import AmortizacionTable from "@/components/pakredito/AmortizacionTable";
 import EditarPrestamoDialog from "@/components/pakredito/EditarPrestamoDialog";
 import EditarDesembolsoDialog from "@/components/pakredito/EditarDesembolsoDialog";
 import ConfirmMotivoDialog from "@/components/pakredito/ConfirmMotivoDialog";
 import AbonoDetailDialog from "@/components/pakredito/AbonoDetailDialog";
 import EditarAbonoDialog from "@/components/pakredito/EditarAbonoDialog";
+import ProrrocaDialog from "@/components/pakredito/ProrrocaDialog";
 import { useToast } from "@/components/ui/use-toast";
 
 const ESTADO_VARIANT = { vigente: "secondary", saldado: "outline", en_mora: "destructive", refinanciado: "secondary" };
@@ -45,6 +46,7 @@ export default function PrestamoDetail({
   const [currentPrestamo, setCurrentPrestamo] = useState(prestamo);
 
   const [editOpen, setEditOpen] = useState(false);
+  const [prorrocaOpen, setProrrocaOpen] = useState(false);
   const [editDesembolsoOpen, setEditDesembolsoOpen] = useState(false);
   const [deletePrestamoOpen, setDeletePrestamoOpen] = useState(false);
   const [deleteAbonoId, setDeleteAbonoId] = useState(null);
@@ -58,43 +60,27 @@ export default function PrestamoDetail({
 
   useEffect(() => {
     if (!open || !currentPrestamo) return;
-    base44.entities.CuotaAmortizacion.filter({ prestamo_id: currentPrestamo.id })
-      .then((c) => {
-        if (c && c.length > 0) {
-          setCuotas((c || []).sort((a, b) => a.numero - b.numero));
-        } else {
-          // Si no estaban creadas en BD, generar la tabla para que siempre esté disponible
-          const gen = currentPrestamo.modelo === "cuota_fija"
-            ? generarAmortizacionCuotaFija(
-                currentPrestamo.capital,
-                currentPrestamo.tasa_nominal,
-                currentPrestamo.periodo || "mensual",
-                currentPrestamo.numero_cuotas,
-                currentPrestamo.fecha_prestamo,
-                currentPrestamo.cuota_fija
-              )
-            : generarAmortizacionMesVencido(
-                currentPrestamo.capital,
-                currentPrestamo.tasa_nominal,
-                currentPrestamo.periodo || "mensual",
-                currentPrestamo.numero_cuotas,
-                currentPrestamo.fecha_prestamo
-              );
-          setCuotas(gen.schedule || []);
-        }
-      })
-      .catch(() => setCuotas([]));
-    cargarAbonos();
+    cargarDatos();
   }, [open, currentPrestamo?.id]);
 
-  const cargarAbonos = async () => {
+  const cargarDatos = async () => {
     if (!currentPrestamo) return;
     setLoadingAbonos(true);
     try {
-      const all = await base44.entities.AbonoPrestamo.list("-fecha", 1000);
       const pId = String(currentPrestamo.id).trim();
       const pCodigo = currentPrestamo.codigo ? String(currentPrestamo.codigo).trim().toLowerCase() : "";
-      
+
+      const [freshP, cuotasBD, all] = await Promise.all([
+        base44.entities.Prestamo.get(currentPrestamo.id),
+        base44.entities.CuotaAmortizacion.filter({ prestamo_id: currentPrestamo.id }),
+        base44.entities.AbonoPrestamo.list("-fecha", 1000)
+      ]);
+
+      const prestamoActivo = freshP || currentPrestamo;
+      if (freshP) {
+        setCurrentPrestamo(freshP);
+      }
+
       const filtrados = (all || []).filter((a) => {
         const dList = parseDet(a.detalles);
         return dList.some((d) => 
@@ -103,9 +89,34 @@ export default function PrestamoDetail({
         );
       });
       setAbonos(filtrados);
+
+      // Si no habían cuotas en BD, generar la plantilla inicial
+      const baseCuotas = (cuotasBD && cuotasBD.length > 0)
+        ? [...cuotasBD].sort((a, b) => a.numero - b.numero)
+        : (prestamoActivo.modelo === "cuota_fija"
+            ? (generarAmortizacionCuotaFija(
+                prestamoActivo.capital,
+                prestamoActivo.tasa_nominal,
+                prestamoActivo.periodo || "mensual",
+                prestamoActivo.numero_cuotas,
+                prestamoActivo.fecha_prestamo,
+                prestamoActivo.cuota_fija
+              ).schedule || [])
+            : (generarAmortizacionMesVencido(
+                prestamoActivo.capital,
+                prestamoActivo.tasa_nominal,
+                prestamoActivo.periodo || "mensual",
+                prestamoActivo.numero_cuotas,
+                prestamoActivo.fecha_prestamo
+              ).schedule || []));
+
+      // Reconciliar matemáticamente las cuotas con los abonos reales
+      const cuotasReconciliadas = reconciliarCuotasConAbonos(baseCuotas, filtrados, prestamoActivo);
+      setCuotas(cuotasReconciliadas);
     } catch (e) {
-      console.error("Error al cargar abonos:", e);
+      console.error("Error al cargar cuotas y abonos:", e);
       setAbonos([]);
+      setCuotas([]);
     } finally {
       setLoadingAbonos(false);
     }
@@ -188,19 +199,12 @@ export default function PrestamoDetail({
         setExpandedAbonoId(null);
       }
 
-      // Recargar abonos
-      await cargarAbonos();
-
-      // Recargar el préstamo actualizado y cuotas
-      const [updatedP, updatedCuotas] = await Promise.all([
-        base44.entities.Prestamo.get(currentPrestamo.id),
-        base44.entities.CuotaAmortizacion.filter({ prestamo_id: currentPrestamo.id })
-      ]);
-
+      // Recargar datos reconciliados y préstamo actualizado
+      await cargarDatos();
+      const updatedP = await base44.entities.Prestamo.get(currentPrestamo.id);
       if (updatedP) {
         setCurrentPrestamo(updatedP);
       }
-      setCuotas((updatedCuotas || []).sort((a, b) => a.numero - b.numero));
 
       onChanged?.();
     } catch (err) {
@@ -245,15 +249,11 @@ export default function PrestamoDetail({
 
   const handleAbonoSaved = async () => {
     setEditAbono(null);
-    await cargarAbonos();
-    const [updatedP, updatedCuotas] = await Promise.all([
-      base44.entities.Prestamo.get(currentPrestamo.id),
-      base44.entities.CuotaAmortizacion.filter({ prestamo_id: currentPrestamo.id })
-    ]);
+    await cargarDatos();
+    const updatedP = await base44.entities.Prestamo.get(currentPrestamo.id);
     if (updatedP) {
       setCurrentPrestamo(updatedP);
     }
-    setCuotas((updatedCuotas || []).sort((a, b) => a.numero - b.numero));
     onChanged?.();
   };
 
@@ -274,7 +274,12 @@ export default function PrestamoDetail({
                   {currentPrestamo.estado}
                 </Badge>
               </DialogTitle>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
+                {currentPrestamo.estado !== "saldado" && (
+                  <Button size="sm" variant="outline" onClick={() => setProrrocaOpen(true)} className="text-primary hover:bg-primary/10">
+                    <CalendarPlus className="w-4 h-4 mr-1" /> Prorrogar
+                  </Button>
+                )}
                 <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
                   <Pencil className="w-4 h-4 mr-1" /> Editar
                 </Button>
@@ -378,6 +383,7 @@ export default function PrestamoDetail({
                         <th className="px-3 py-2 font-medium">Fecha</th>
                         <th className="px-3 py-2 font-medium text-right">Abono</th>
                         <th className="px-3 py-2 font-medium text-right">Intereses</th>
+                        <th className="px-3 py-2 font-medium text-right text-amber-600 dark:text-amber-400">Otros cobros</th>
                         <th className="px-3 py-2 font-medium text-right">Capital</th>
                         <th className="px-3 py-2 font-medium text-center">Asiento</th>
                         <th className="px-3 py-2 font-medium text-center w-32">Acciones</th>
@@ -393,6 +399,8 @@ export default function PrestamoDetail({
                         ) || {};
                         const isExpanded = expandedAbonoId === a.id;
                         const asiento = asientoCache[a.id];
+                        const otros = Number(d.otros_cobros) || 0;
+                        const capital = d.capital !== undefined ? Number(d.capital) : Math.max(0, (d.valor_aplicado || 0) - (d.intereses || 0) - otros);
 
                         return (
                           <React.Fragment key={a.id}>
@@ -404,8 +412,11 @@ export default function PrestamoDetail({
                               <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                                 {formatCOP(d.intereses || 0)}
                               </td>
+                              <td className={`px-3 py-2 text-right font-mono ${otros > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-muted-foreground"}`}>
+                                {otros > 0 ? formatCOP(otros) : "—"}
+                              </td>
                               <td className="px-3 py-2 text-right font-mono text-primary font-medium">
-                                {formatCOP(d.capital !== undefined ? d.capital : Math.max(0, (d.valor_aplicado || 0) - (d.intereses || 0)))}
+                                {formatCOP(capital)}
                               </td>
                               <td className="px-3 py-2 text-center">
                                 <Button
@@ -638,6 +649,17 @@ export default function PrestamoDetail({
         title="Eliminar abono de crédito"
         description="Se anulará el comprobante del abono (nota crédito o anulación) y se restaurará el saldo de capital y las cuotas de amortización del crédito automáticamente."
         onConfirm={eliminarAbono}
+      />
+
+      <ProrrocaDialog
+        open={prorrocaOpen}
+        onOpenChange={setProrrocaOpen}
+        prestamo={currentPrestamo}
+        clienteNombre={clienteNombre}
+        onSaved={() => {
+          loadAll();
+          onChanged?.();
+        }}
       />
     </>
   );

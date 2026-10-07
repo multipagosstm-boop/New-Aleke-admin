@@ -433,10 +433,18 @@ export default function Pakredito() {
                       <td className="px-3 py-2 font-mono text-xs">{formatDate(p.fecha_proximo_pago) || "—"}</td>
                       <td className="px-3 py-2 text-center"><Badge variant={ESTADO_VARIANT[p.estado]} className="text-[10px]">{p.estado}</Badge></td>
                       <td className="px-3 py-2 text-center">
-                        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-destructive/10"
-                          onClick={(e) => { e.stopPropagation(); setDeletePrestamoTarget(p); }} title="Eliminar préstamo">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          {p.estado !== "saldado" && (
+                            <Button size="sm" variant="outline" className="h-7 px-2 text-[11px] text-primary border-primary/30 hover:bg-primary/10"
+                              onClick={(e) => { e.stopPropagation(); setProrrocaPrestamo(p); }} title="Otorgar prórroga">
+                              <CalendarPlus className="w-3 h-3 mr-1" /> Prórroga
+                            </Button>
+                          )}
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                            onClick={(e) => { e.stopPropagation(); setDeletePrestamoTarget(p); }} title="Eliminar préstamo">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}

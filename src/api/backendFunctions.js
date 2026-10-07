@@ -15,7 +15,8 @@ import {
   generarAmortizacionMesVencido,
   estimarInteresesMesVencido,
   sumarPeriodo,
-  calcularSaldoTotalDeber
+  calcularSaldoTotalDeber,
+  reconciliarCuotasConAbonos
 } from "../lib/pakredito";
 import { calcularNextCodigo, getClaseNombre } from "../lib/cuentasPuc";
 import { formatCOP } from "../lib/contabilidad";
@@ -607,9 +608,187 @@ export async function recalcularTotalesComprobante(entities, payload = {}) {
   return { success: true, comprobante: updated, debito: deb, credito: cred };
 }
 
+export async function reconciliarCuotasPrestamo(entities, prestamoId) {
+  if (!prestamoId) return [];
+  const p = await entities.Prestamo.get(prestamoId);
+  if (!p) return [];
+
+  const pId = String(p.id).trim();
+  const pCodigo = p.codigo ? String(p.codigo).trim().toLowerCase() : "";
+
+  let cuotasBD = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+  cuotasBD = (cuotasBD || []).sort((a, b) => a.numero - b.numero);
+
+  if (cuotasBD.length === 0) {
+    const gen = p.modelo === "cuota_fija"
+      ? generarAmortizacionCuotaFija(p.capital, p.tasa_nominal, p.periodo || "mensual", p.numero_cuotas, p.fecha_prestamo, p.cuota_fija)
+      : generarAmortizacionMesVencido(p.capital, p.tasa_nominal, p.periodo || "mensual", p.numero_cuotas, p.fecha_prestamo);
+    if (Array.isArray(gen.schedule)) {
+      cuotasBD = [];
+      for (const c of gen.schedule) {
+        const created = await entities.CuotaAmortizacion.create({
+          prestamo_id: p.id,
+          numero: c.numero,
+          fecha_vencimiento: c.fecha_vencimiento,
+          cuota: c.cuota,
+          interes: c.interes,
+          capital_abono: c.capital_abono,
+          saldo_capital: c.saldo_capital,
+          estado: "pendiente",
+          valor_pagado: 0,
+          fecha_pago: null,
+          abono_id: null
+        });
+        cuotasBD.push(created);
+      }
+    }
+  }
+
+  const todosAbonos = await entities.AbonoPrestamo.list("-fecha", 1000);
+  const parseDet = (d) => {
+    if (Array.isArray(d)) return d;
+    if (typeof d === "string") {
+      try { return JSON.parse(d); } catch { return []; }
+    }
+    return [];
+  };
+
+  const abonosPrestamo = (todosAbonos || []).filter((a) => {
+    const dList = parseDet(a.detalles);
+    return dList.some((d) => 
+      String(d.prestamo_id).trim() === pId ||
+      (d.codigo && String(d.codigo).trim().toLowerCase() === pCodigo)
+    );
+  });
+
+  // Calcular capital efectivamente abonado según contabilidad y recibos reales
+  let capitalTotalAbonado = 0;
+  for (const a of abonosPrestamo) {
+    const dList = parseDet(a.detalles);
+    const d = dList.find((x) =>
+      String(x.prestamo_id).trim() === pId ||
+      (x.codigo && String(x.codigo).trim().toLowerCase() === pCodigo)
+    );
+    if (!d) continue;
+    const val = Number(d.valor_aplicado) || 0;
+    const intVal = Number(d.intereses) || 0;
+    const extraVal = Number(d.otros_cobros) || 0;
+    const capVal = d.capital !== undefined ? Number(d.capital) : Math.max(0, val - intVal - extraVal);
+    capitalTotalAbonado += capVal;
+  }
+
+  const capitalOriginal = Number(p.capital) || 0;
+  const nuevoSaldoCapital = Math.max(0, capitalOriginal - capitalTotalAbonado);
+  const estaSaldado = p.estado === "saldado" || (capitalOriginal > 0 && nuevoSaldoCapital <= 0.01);
+
+  const cuotasReconciliadas = reconciliarCuotasConAbonos(cuotasBD, abonosPrestamo, {
+    ...p,
+    saldo_capital: estaSaldado ? 0 : nuevoSaldoCapital,
+    estado: estaSaldado ? "saldado" : p.estado
+  });
+
+  for (const c of cuotasReconciliadas) {
+    if (c.id) {
+      await entities.CuotaAmortizacion.update(c.id, {
+        valor_pagado: c.valor_pagado,
+        otros_cobros: c.otros_cobros || 0,
+        estado: estaSaldado ? "pagada" : c.estado,
+        saldo_capital: estaSaldado ? 0 : c.saldo_capital,
+        fecha_pago: c.fecha_pago,
+        abono_id: c.abono_id
+      });
+    }
+  }
+
+  const hoy = new Date().toISOString().substring(0, 10);
+  const ultAbono = [...abonosPrestamo].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""))[0];
+
+  if (estaSaldado) {
+    await entities.Prestamo.update(p.id, {
+      saldo_capital: 0,
+      saldo_intereses: 0,
+      estado: "saldado",
+      fecha_proximo_pago: null,
+      valor_proximo_pago: 0,
+      fecha_ultimo_abono: ultAbono ? ultAbono.fecha : p.fecha_ultimo_abono
+    });
+    return cuotasReconciliadas;
+  }
+
+  const proxCuota = cuotasReconciliadas.find((c) => c.estado !== "pagada") || cuotasReconciliadas[cuotasReconciliadas.length - 1];
+
+  // Extraer fecha prorrogada de las notas si existe (ej. "nuevo vencimiento 2026-10-27" o "nuevo vence 2026-10-27")
+  let fechaNotaProrroga = null;
+  if (p.notas) {
+    const match = p.notas.match(/(?:nuevo vencimiento|nuevo vence)\s+([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
+    if (match && match[1]) {
+      fechaNotaProrroga = match[1];
+    }
+  }
+
+  let fechaProxFinal = p.fecha_proximo_pago;
+  if (fechaNotaProrroga) {
+    fechaProxFinal = fechaNotaProrroga;
+  } else if (!fechaProxFinal && proxCuota?.fecha_vencimiento) {
+    fechaProxFinal = proxCuota.fecha_vencimiento;
+  }
+
+  // Si la fecha es nula o anterior al último abono registrado, proyectarla según el periodo del crédito
+  if (!fechaProxFinal || (p.fecha_ultimo_abono && fechaProxFinal < p.fecha_ultimo_abono)) {
+    const baseFecha = p.fecha_ultimo_abono || p.fecha_prestamo || hoy;
+    fechaProxFinal = sumarPeriodo(baseFecha, p.periodo || "mensual", 1);
+  }
+
+  // Sincronizar fecha de vencimiento en la cuota activa
+  if (proxCuota && fechaProxFinal && proxCuota.fecha_vencimiento !== fechaProxFinal) {
+    proxCuota.fecha_vencimiento = fechaProxFinal;
+    if (proxCuota.id) {
+      await entities.CuotaAmortizacion.update(proxCuota.id, { fecha_vencimiento: fechaProxFinal });
+    }
+  }
+
+  const nuevoEstado = (fechaProxFinal && fechaProxFinal < hoy) ? "en_mora" : "vigente";
+
+  let valorProxFinal = 0;
+  if (p.modelo === "mes_vencido") {
+    const tasa = Number(p.tasa_efectiva_periodo) || Number(p.tasa_nominal) || 0.1;
+    const interesPeriodo = Math.round(nuevoSaldoCapital * tasa);
+    valorProxFinal = (p.valor_proximo_pago > 0 && p.valor_proximo_pago <= interesPeriodo)
+      ? p.valor_proximo_pago
+      : (interesPeriodo > 0 ? interesPeriodo : nuevoSaldoCapital);
+  } else {
+    valorProxFinal = proxCuota ? Math.max(0, (Number(proxCuota.cuota) || 0) - (Number(proxCuota.valor_pagado) || 0)) : nuevoSaldoCapital;
+  }
+
+  await entities.Prestamo.update(p.id, {
+    saldo_capital: nuevoSaldoCapital,
+    estado: nuevoEstado,
+    fecha_proximo_pago: fechaProxFinal,
+    valor_proximo_pago: valorProxFinal,
+    fecha_ultimo_abono: ultAbono ? ultAbono.fecha : null
+  });
+
+  return cuotasReconciliadas;
+}
+
 export async function gestionarPakredito(entities, payload = {}) {
   const { accion, ...params } = payload;
   const hoy = new Date().toISOString().split("T")[0];
+
+  // 0. RECONCILIAR CUOTAS
+  if (accion === "reconciliarCuotas") {
+    const { prestamo_id } = params;
+    if (prestamo_id) {
+      const cuotas = await reconciliarCuotasPrestamo(entities, prestamo_id);
+      return { success: true, cuotas };
+    }
+    const prestamos = await entities.Prestamo.list("-created_date", 200);
+    for (const p of (prestamos || [])) {
+      await reconciliarCuotasPrestamo(entities, p.id);
+    }
+    await recalcularSaldos(entities);
+    return { success: true };
+  }
 
   // 1. CREAR PRÉSTAMO
   if (accion === "crearPrestamo") {
@@ -802,14 +981,35 @@ export async function gestionarPakredito(entities, payload = {}) {
     };
 
     // 2. Créditos por cada préstamo:
+    // 2. Créditos por cada préstamo:
     //    - Capital abonado a 120506 PAKREDITO
     //    - Intereses pagados a 410503 Pakredito
+    //    - Otros cobros pagados a 410503 Pakredito
+    // Pre-resolver cuota_id y cuota_numero si no fueron enviados
+    for (const d of detalles) {
+      if (!d.cuota_id || !d.cuota_numero) {
+        try {
+          const cuotasP = await entities.CuotaAmortizacion.filter({ prestamo_id: d.prestamo_id });
+          const cuotaPend = (cuotasP || []).filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero)[0];
+          if (cuotaPend) {
+            if (!d.cuota_id) d.cuota_id = cuotaPend.id;
+            if (!d.cuota_numero) d.cuota_numero = cuotaPend.numero;
+          }
+        } catch { /* noop */ }
+      }
+    }
+
     const movsCredito = [];
     for (const d of detalles) {
       const p = prestamosMap[d.prestamo_id];
       const valorAplicado = Number(d.valor_aplicado) || 0;
-      const intereses = Math.round(Number(d.intereses) || 0);
-      const capitalAbono = Math.max(0, valorAplicado - intereses);
+      const intRaw = Math.round(Number(d.intereses) || 0);
+      const cobroMas = Boolean(d.cobro_intereses_de_mas);
+      const otrosCobros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
+      const intereses = (cobroMas && intRaw > otrosCobros && otrosCobros > 0)
+        ? (intRaw - otrosCobros)
+        : (cobroMas && intRaw === otrosCobros ? 0 : intRaw);
+      const capitalAbono = Math.max(0, valorAplicado - intereses - otrosCobros);
 
       if (capitalAbono > 0) {
         movsCredito.push({
@@ -831,6 +1031,16 @@ export async function gestionarPakredito(entities, payload = {}) {
           cliente_id: cliente.id
         });
       }
+      if (otrosCobros > 0) {
+        movsCredito.push({
+          subcuenta: p?.subcuenta_intereses || "410503",
+          debito: 0,
+          credito: otrosCobros,
+          descripcion: `Otros cobros / Cobro extra ${p?.codigo || ""}`,
+          tercero: cliente.nombre,
+          cliente_id: cliente.id
+        });
+      }
     }
 
     const descComp = `Abono pakredito — ${cliente.nombre}${codigosAbonados.length ? ` (${codigosAbonados.join(", ")})` : ""}`;
@@ -843,7 +1053,6 @@ export async function gestionarPakredito(entities, payload = {}) {
     const comprobante_id = compRes?.comprobante?.id || null;
 
     // Crear registro AbonoPrestamo
-    // Crear registro AbonoPrestamo (solo columnas válidas de la tabla abono_prestamo)
     const abono = await entities.AbonoPrestamo.create({
       cliente_id: cliente.id,
       fecha: fechaDoc,
@@ -853,12 +1062,21 @@ export async function gestionarPakredito(entities, payload = {}) {
       cda_id: cuenta_ingreso.cuenta_ahorro_id || null,
       detalles: detalles.map((d) => {
         const val = Number(d.valor_aplicado) || 0;
-        const intVal = Number(d.intereses) || 0;
+        const intRaw = Number(d.intereses) || 0;
+        const cobroMas = Boolean(d.cobro_intereses_de_mas);
+        const otrosCobros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
+        const intVal = (cobroMas && intRaw > otrosCobros && otrosCobros > 0)
+          ? (intRaw - otrosCobros)
+          : (cobroMas && intRaw === otrosCobros ? 0 : intRaw);
         return {
           prestamo_id: d.prestamo_id,
           valor_aplicado: val,
           intereses: intVal,
-          capital: Math.max(0, val - intVal)
+          cobro_intereses_de_mas: cobroMas,
+          otros_cobros: otrosCobros,
+          cuota_id: d.cuota_id || null,
+          cuota_numero: d.cuota_numero || null,
+          capital: Math.max(0, val - intVal - otrosCobros)
         };
       }),
       notas: notas || null
@@ -870,8 +1088,13 @@ export async function gestionarPakredito(entities, payload = {}) {
       if (!p) continue;
 
       const valorAplicado = Number(d.valor_aplicado) || 0;
-      const intereses = Number(d.intereses) || 0;
-      const capitalAbono = Math.max(0, valorAplicado - intereses);
+      const intRaw = Number(d.intereses) || 0;
+      const cobroMas = Boolean(d.cobro_intereses_de_mas);
+      const otrosCobros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
+      const intereses = (cobroMas && intRaw > otrosCobros && otrosCobros > 0)
+        ? (intRaw - otrosCobros)
+        : (cobroMas && intRaw === otrosCobros ? 0 : intRaw);
+      const capitalAbono = Math.max(0, valorAplicado - intereses - otrosCobros);
 
       const nuevoSaldoCapital = Math.max(0, (Number(p.saldo_capital) || 0) - capitalAbono);
 
@@ -884,24 +1107,22 @@ export async function gestionarPakredito(entities, payload = {}) {
 
       if (p.modelo === "mes_vencido" && capitalAbono <= 0 && intereses > 0) {
         // CASO: CUOTA VARIABLE - PAGO EXCLUSIVO DE INTERESES (PRÓRROGA AUTOMÁTICA)
-        // Si únicamente paga intereses, se prorroga y pasa hasta el siguiente plazo a pagar.
         const baseFecha = (p.fecha_proximo_pago && p.fecha_proximo_pago >= fechaDoc) ? p.fecha_proximo_pago : fechaDoc;
         fechaProximoPago = sumarPeriodo(baseFecha, periodoCredito, 1);
         valorProximoPago = Math.round(nuevoSaldoCapital * (Number(p.tasa_efectiva_periodo) || Number(p.tasa_nominal) || 0));
 
-        // En la tabla de amortización: registrar el pago en la cuota actual y prorrogar vencimientos pendientes
         const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
         const cuotasPendientes = (cuotas || []).filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
 
         if (cuotasPendientes.length > 0) {
           const cuotaActual = cuotasPendientes[0];
           await entities.CuotaAmortizacion.update(cuotaActual.id, {
-            valor_pagado: (Number(cuotaActual.valor_pagado) || 0) + intereses,
+            valor_pagado: (Number(cuotaActual.valor_pagado) || 0) + valorAplicado,
+            otros_cobros: (Number(cuotaActual.otros_cobros) || 0) + otrosCobros,
             fecha_pago: fechaDoc,
             abono_id: abono.id
           });
 
-          // Desplazar las fechas de vencimiento de las cuotas pendientes en 1 periodo
           for (const c of cuotasPendientes) {
             const nuevaVenc = sumarPeriodo(c.fecha_vencimiento, periodoCredito, 1);
             await entities.CuotaAmortizacion.update(c.id, {
@@ -909,40 +1130,149 @@ export async function gestionarPakredito(entities, payload = {}) {
             });
           }
         }
-        notaAdicional = `Prórroga por pago de intereses (${fechaDoc}): +1 ${periodoCredito} → nuevo vencimiento ${fechaProximoPago}`;
-      } else {
-        // APLICACIÓN A CUOTAS (Tanto cuota fija como mes vencido con abono a capital)
+        notaAdicional = `Prórroga por pago de intereses (${fechaDoc}): +1 ${periodoCredito} → nuevo vencimiento ${fechaProximoPago}${otrosCobros > 0 ? ` (Cobro extra: $${otrosCobros})` : ""}`;
+      } else if (p.modelo === "mes_vencido") {
+        // CASO: CUOTA VARIABLE CON ABONO A CAPITAL
         const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
-        const cuotasOrdenadas = (cuotas || []).sort((a, b) => (Number(a.numero) || 0) - (Number(b.numero) || 0));
+        const cuotasPendientes = (cuotas || []).filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
+        const cuotaActual = cuotasPendientes[0];
 
-        let rem = valorAplicado;
-        for (const c of cuotasOrdenadas) {
-          if (rem <= 0 && nuevoSaldoCapital > 0) break;
-          if (c.estado === "pagada") continue;
+        if (cobroMas && otrosCobros > 0 && cuotaActual) {
+          const faltaOrd = Math.max(0, (Number(cuotaActual.cuota) || 0) - (Number(cuotaActual.valor_pagado) || 0));
+          const pagoOrd = Math.min(valorAplicado, faltaOrd);
+          let rem = valorAplicado - pagoOrd;
+          const asignableExtra = Math.min(rem, otrosCobros);
+          rem -= asignableExtra;
 
-          // Si el saldo de capital quedó en 0, todas las cuotas restantes se dan por pagadas
-          if (nuevoSaldoCapital <= 0) {
-            await entities.CuotaAmortizacion.update(c.id, {
-              valor_pagado: c.cuota,
-              estado: "pagada",
-              fecha_pago: fechaDoc,
-              abono_id: abono.id
-            });
-            continue;
-          }
+          const totalPagadoCuota = (Number(cuotaActual.valor_pagado) || 0) + pagoOrd + asignableExtra;
+          const yaPagada = ((Number(cuotaActual.valor_pagado) || 0) + pagoOrd) >= ((Number(cuotaActual.cuota) || 0) - 0.01);
 
-          const falta = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
-          if (falta <= 0) continue;
-          const pago = Math.min(rem, falta);
-          const nuevoPagado = (Number(c.valor_pagado) || 0) + pago;
-          const yaPagada = nuevoPagado >= ((Number(c.cuota) || 0) - 0.01);
-          await entities.CuotaAmortizacion.update(c.id, {
-            valor_pagado: nuevoPagado,
+          await entities.CuotaAmortizacion.update(cuotaActual.id, {
+            valor_pagado: totalPagadoCuota,
+            otros_cobros: (Number(cuotaActual.otros_cobros) || 0) + asignableExtra,
             estado: yaPagada ? "pagada" : "pendiente",
             fecha_pago: fechaDoc,
             abono_id: abono.id
           });
-          rem -= pago;
+
+          if (rem > 0) {
+            for (const sig of cuotasPendientes) {
+              if (sig.id === cuotaActual.id || rem <= 0) continue;
+              const fSig = Math.max(0, (Number(sig.cuota) || 0) - (Number(sig.valor_pagado) || 0));
+              if (fSig <= 0) continue;
+              const pSig = Math.min(rem, fSig);
+              const nuevoPagSig = (Number(sig.valor_pagado) || 0) + pSig;
+              const yaPagSig = nuevoPagSig >= ((Number(sig.cuota) || 0) - 0.01);
+              await entities.CuotaAmortizacion.update(sig.id, {
+                valor_pagado: nuevoPagSig,
+                estado: yaPagSig ? "pagada" : "pendiente",
+                fecha_pago: fechaDoc,
+                abono_id: abono.id
+              });
+              rem -= pSig;
+            }
+          }
+        } else {
+          // Comportamiento natural: todo el saldo restante se aplica a la siguiente cuota
+          let rem = valorAplicado;
+          for (const c of (cuotasPendientes || [])) {
+            if (rem <= 0) break;
+            const falta = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
+            if (falta <= 0) continue;
+            const pago = Math.min(rem, falta);
+            const nuevoPagado = (Number(c.valor_pagado) || 0) + pago;
+            const yaPagada = nuevoPagado >= ((Number(c.cuota) || 0) - 0.01);
+            await entities.CuotaAmortizacion.update(c.id, {
+              valor_pagado: nuevoPagado,
+              estado: yaPagada ? "pagada" : "pendiente",
+              fecha_pago: fechaDoc,
+              abono_id: abono.id
+            });
+            rem -= pago;
+          }
+        }
+
+        const cuotasActualizadas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+        const prox = (cuotasActualizadas || []).sort((a, b) => a.numero - b.numero).find((c) => c.estado !== "pagada");
+        fechaProximoPago = prox ? prox.fecha_vencimiento : null;
+        valorProximoPago = prox ? Math.max(0, (Number(prox.cuota) || 0) - (Number(prox.valor_pagado) || 0)) : 0;
+      } else {
+        // CASO: CUOTA FIJA
+        const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+        const cuotasOrdenadas = (cuotas || []).sort((a, b) => (Number(a.numero) || 0) - (Number(b.numero) || 0));
+
+        if (cobroMas && otrosCobros > 0) {
+          // Si se cobró de más en intereses:
+          // Cubrimos intereses y capital de esta cuota, y sumamos el saldo de más a 'otros_cobros'
+          // sin aplicarse para la cuota siguiente!
+          const c = cuotasOrdenadas.find((x) => x.estado !== "pagada");
+          if (c) {
+            const faltaCuotaOrd = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
+            const pagoOrd = Math.min(valorAplicado, faltaCuotaOrd);
+            let rem = valorAplicado - pagoOrd;
+            const asignadoExtra = Math.min(rem, otrosCobros);
+            rem -= asignadoExtra;
+
+            const totalPagadoCuota = (Number(c.valor_pagado) || 0) + pagoOrd + asignadoExtra;
+            const yaPagada = ((Number(c.valor_pagado) || 0) + pagoOrd) >= ((Number(c.cuota) || 0) - 0.01);
+
+            await entities.CuotaAmortizacion.update(c.id, {
+              valor_pagado: totalPagadoCuota,
+              otros_cobros: (Number(c.otros_cobros) || 0) + asignadoExtra,
+              estado: yaPagada ? "pagada" : "pendiente",
+              fecha_pago: fechaDoc,
+              abono_id: abono.id
+            });
+
+            // Si aún sobró dinero más allá de cuota ord + otros cobros, se aplica a siguientes cuotas
+            if (rem > 0) {
+              for (const sig of cuotasOrdenadas) {
+                if (sig.id === c.id || sig.estado === "pagada" || rem <= 0) continue;
+                const fSig = Math.max(0, (Number(sig.cuota) || 0) - (Number(sig.valor_pagado) || 0));
+                if (fSig <= 0) continue;
+                const pSig = Math.min(rem, fSig);
+                const nuevoPagSig = (Number(sig.valor_pagado) || 0) + pSig;
+                const yaPagSig = nuevoPagSig >= ((Number(sig.cuota) || 0) - 0.01);
+                await entities.CuotaAmortizacion.update(sig.id, {
+                  valor_pagado: nuevoPagSig,
+                  estado: yaPagSig ? "pagada" : "pendiente",
+                  fecha_pago: fechaDoc,
+                  abono_id: abono.id
+                });
+                rem -= pSig;
+              }
+            }
+          }
+        } else {
+          // En caso contrario: dicho saldo automáticamente se aplica para la cuota siguiente
+          let rem = valorAplicado;
+          for (const c of cuotasOrdenadas) {
+            if (rem <= 0 && nuevoSaldoCapital > 0) break;
+            if (c.estado === "pagada") continue;
+
+            if (nuevoSaldoCapital <= 0) {
+              await entities.CuotaAmortizacion.update(c.id, {
+                valor_pagado: c.cuota,
+                estado: "pagada",
+                fecha_pago: fechaDoc,
+                abono_id: abono.id
+              });
+              continue;
+            }
+
+            const falta = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
+            if (falta <= 0) continue;
+            const pago = Math.min(rem, falta);
+            const nuevoPagado = (Number(c.valor_pagado) || 0) + pago;
+            const yaPagada = nuevoPagado >= ((Number(c.cuota) || 0) - 0.01);
+            await entities.CuotaAmortizacion.update(c.id, {
+              valor_pagado: nuevoPagado,
+              estado: yaPagada ? "pagada" : "pendiente",
+              fecha_pago: fechaDoc,
+              abono_id: abono.id
+            });
+            rem -= pago;
+          }
         }
 
         const cuotasActualizadas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
@@ -978,6 +1308,12 @@ export async function gestionarPakredito(entities, payload = {}) {
       });
     }
 
+    for (const d of detalles) {
+      if (d.prestamo_id) {
+        await reconciliarCuotasPrestamo(entities, d.prestamo_id);
+      }
+    }
+
     await recalcularSaldos(entities);
     return { success: true, abono };
   }
@@ -1005,64 +1341,16 @@ export async function gestionarPakredito(entities, payload = {}) {
       });
     }
 
-    // 2. Revertir saldo en los préstamos y cuotas
+    // 2. Eliminar el registro AbonoPrestamo
     const detallesAbono = parseDet(abono.detalles);
-    for (const d of detallesAbono) {
-      const p = await entities.Prestamo.get(d.prestamo_id);
-      if (!p) continue;
-
-      const valorAplicado = Number(d.valor_aplicado) || 0;
-      const intereses = Number(d.intereses) || 0;
-      const capitalAbono = d.capital !== undefined ? Number(d.capital) : Math.max(0, valorAplicado - intereses);
-
-      const saldoRestaurado = (Number(p.saldo_capital) || 0) + capitalAbono;
-
-      let fechaProximoPago = p.fecha_proximo_pago;
-      let valorProximoPago = p.valor_proximo_pago;
-      let saldoIntereses = p.saldo_intereses || 0;
-
-      if (p.modelo === "cuota_fija") {
-        const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
-        for (const c of (cuotas || [])) {
-          if (c.abono_id === abono.id) {
-            await entities.CuotaAmortizacion.update(c.id, {
-              valor_pagado: 0,
-              estado: "pendiente",
-              fecha_pago: null,
-              abono_id: null
-            });
-          }
-        }
-        const cuotasActualizadas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
-        const prox = (cuotasActualizadas || []).sort((a, b) => a.numero - b.numero).find((c) => c.estado !== "pagada");
-        fechaProximoPago = prox ? prox.fecha_vencimiento : null;
-        valorProximoPago = prox ? prox.cuota : 0;
-      } else if (p.modelo === "mes_vencido") {
-        saldoIntereses = (Number(p.saldo_intereses) || 0) + intereses;
-        valorProximoPago = saldoRestaurado * (Number(p.tasa_nominal) || 0);
-      }
-
-      const nuevoEstado = saldoRestaurado <= 0 ? "saldado" : (fechaProximoPago && fechaProximoPago < hoy ? "en_mora" : "vigente");
-
-      // Buscar fecha del abono anterior más reciente si existe
-      const todosAbonosCliente = await entities.AbonoPrestamo.filter({ cliente_id: p.cliente_id });
-      const restantes = (todosAbonosCliente || [])
-        .filter((oa) => oa.id !== abono.id && parseDet(oa.detalles).some((x) => String(x.prestamo_id) === String(p.id)))
-        .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
-      const ultFecha = restantes.length > 0 ? restantes[0].fecha : null;
-
-      await entities.Prestamo.update(p.id, {
-        saldo_capital: saldoRestaurado,
-        fecha_ultimo_abono: ultFecha,
-        fecha_proximo_pago: fechaProximoPago,
-        valor_proximo_pago: valorProximoPago,
-        saldo_intereses: p.modelo === "mes_vencido" ? saldoIntereses : 0,
-        estado: nuevoEstado
-      });
-    }
-
-    // 3. Eliminar el registro AbonoPrestamo
     await entities.AbonoPrestamo.delete(abono.id);
+
+    // 3. Reconciliar matemáticamente cada préstamo afectado y su tabla de cuotas
+    for (const d of detallesAbono) {
+      if (d.prestamo_id) {
+        await reconciliarCuotasPrestamo(entities, d.prestamo_id);
+      }
+    }
 
     await recalcularSaldos(entities);
     return { success: true };
@@ -1156,8 +1444,13 @@ export async function gestionarPakredito(entities, payload = {}) {
       for (const d of detallesFinales) {
         const p = prestamosMap[d.prestamo_id];
         const val = Number(d.valor_aplicado) || 0;
-        const intVal = Math.round(Number(d.intereses) || 0);
-        const cap = Math.max(0, val - intVal);
+        const intRaw = Math.round(Number(d.intereses) || 0);
+        const cobroMas = Boolean(d.cobro_intereses_de_mas);
+        const otros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
+        const intVal = (cobroMas && intRaw > otros && otros > 0)
+          ? (intRaw - otros)
+          : (cobroMas && intRaw === otros ? 0 : intRaw);
+        const cap = Math.max(0, val - intVal - otros);
 
         if (cap > 0) {
           movsCredito.push({
@@ -1175,6 +1468,16 @@ export async function gestionarPakredito(entities, payload = {}) {
             debito: 0,
             credito: intVal,
             descripcion: `Intereses ${p?.codigo || ""}`,
+            tercero: cliente?.nombre || "",
+            cliente_id: abono.cliente_id
+          });
+        }
+        if (otros > 0) {
+          movsCredito.push({
+            subcuenta: p?.subcuenta_intereses || "410503",
+            debito: 0,
+            credito: otros,
+            descripcion: `Otros cobros / Cobro extra ${p?.codigo || ""}`,
             tercero: cliente?.nombre || "",
             cliente_id: abono.cliente_id
           });
@@ -1197,8 +1500,13 @@ export async function gestionarPakredito(entities, payload = {}) {
       const p = await entities.Prestamo.get(d.prestamo_id);
       if (!p) continue;
       const val = Number(d.valor_aplicado) || 0;
-      const intVal = Number(d.intereses) || 0;
-      const cap = Math.max(0, val - intVal);
+      const intRaw = Number(d.intereses) || 0;
+      const cobroMas = Boolean(d.cobro_intereses_de_mas);
+      const otros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
+      const intVal = (cobroMas && intRaw > otros && otros > 0)
+        ? (intRaw - otros)
+        : (cobroMas && intRaw === otros ? 0 : intRaw);
+      const cap = Math.max(0, val - intVal - otros);
 
       const nuevoSaldoCapital = Math.max(0, (Number(p.saldo_capital) || 0) - cap);
       let fechaProximoPago = p.fecha_proximo_pago;
@@ -1209,33 +1517,73 @@ export async function gestionarPakredito(entities, payload = {}) {
         const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
         const cuotasOrdenadas = (cuotas || []).sort((a, b) => (Number(a.numero) || 0) - (Number(b.numero) || 0));
 
-        let rem = val;
-        for (const c of cuotasOrdenadas) {
-          if (rem <= 0 && nuevoSaldoCapital > 0) break;
-          if (c.estado === "pagada") continue;
+        if (cobroMas && otros > 0) {
+          const c = cuotasOrdenadas.find((x) => x.estado !== "pagada");
+          if (c) {
+            const faltaCuotaOrd = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
+            const pagoOrd = Math.min(val, faltaCuotaOrd);
+            let rem = val - pagoOrd;
+            const asignadoExtra = Math.min(rem, otros);
+            rem -= asignadoExtra;
 
-          if (nuevoSaldoCapital <= 0) {
+            const totalPagadoCuota = (Number(c.valor_pagado) || 0) + pagoOrd + asignadoExtra;
+            const yaPagada = ((Number(c.valor_pagado) || 0) + pagoOrd) >= ((Number(c.cuota) || 0) - 0.01);
+
             await entities.CuotaAmortizacion.update(c.id, {
-              valor_pagado: c.cuota,
-              estado: "pagada",
+              valor_pagado: totalPagadoCuota,
+              otros_cobros: (Number(c.otros_cobros) || 0) + asignadoExtra,
+              estado: yaPagada ? "pagada" : "pendiente",
               fecha_pago: fechaDoc,
               abono_id: abono.id
             });
-            continue;
-          }
 
-          const falta = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
-          if (falta <= 0) continue;
-          const pago = Math.min(rem, falta);
-          const nuevoPagado = (Number(c.valor_pagado) || 0) + pago;
-          const yaPagada = nuevoPagado >= ((Number(c.cuota) || 0) - 0.01);
-          await entities.CuotaAmortizacion.update(c.id, {
-            valor_pagado: nuevoPagado,
-            estado: yaPagada ? "pagada" : "pendiente",
-            fecha_pago: fechaDoc,
-            abono_id: abono.id
-          });
-          rem -= pago;
+            if (rem > 0) {
+              for (const sig of cuotasOrdenadas) {
+                if (sig.id === c.id || sig.estado === "pagada" || rem <= 0) continue;
+                const fSig = Math.max(0, (Number(sig.cuota) || 0) - (Number(sig.valor_pagado) || 0));
+                if (fSig <= 0) continue;
+                const pSig = Math.min(rem, fSig);
+                const nuevoPagSig = (Number(sig.valor_pagado) || 0) + pSig;
+                const yaPagSig = nuevoPagSig >= ((Number(sig.cuota) || 0) - 0.01);
+                await entities.CuotaAmortizacion.update(sig.id, {
+                  valor_pagado: nuevoPagSig,
+                  estado: yaPagSig ? "pagada" : "pendiente",
+                  fecha_pago: fechaDoc,
+                  abono_id: abono.id
+                });
+                rem -= pSig;
+              }
+            }
+          }
+        } else {
+          let rem = val;
+          for (const c of cuotasOrdenadas) {
+            if (rem <= 0 && nuevoSaldoCapital > 0) break;
+            if (c.estado === "pagada") continue;
+
+            if (nuevoSaldoCapital <= 0) {
+              await entities.CuotaAmortizacion.update(c.id, {
+                valor_pagado: c.cuota,
+                estado: "pagada",
+                fecha_pago: fechaDoc,
+                abono_id: abono.id
+              });
+              continue;
+            }
+
+            const falta = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
+            if (falta <= 0) continue;
+            const pago = Math.min(rem, falta);
+            const nuevoPagado = (Number(c.valor_pagado) || 0) + pago;
+            const yaPagada = nuevoPagado >= ((Number(c.cuota) || 0) - 0.01);
+            await entities.CuotaAmortizacion.update(c.id, {
+              valor_pagado: nuevoPagado,
+              estado: yaPagada ? "pagada" : "pendiente",
+              fecha_pago: fechaDoc,
+              abono_id: abono.id
+            });
+            rem -= pago;
+          }
         }
 
         const cuotasActualizadas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
@@ -1243,6 +1591,64 @@ export async function gestionarPakredito(entities, payload = {}) {
         fechaProximoPago = prox ? prox.fecha_vencimiento : null;
         valorProximoPago = prox ? Math.max(0, (Number(prox.cuota) || 0) - (Number(prox.valor_pagado) || 0)) : 0;
       } else if (p.modelo === "mes_vencido") {
+        const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
+        const cuotasPendientes = (cuotas || []).filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
+        const cuotaActual = cuotasPendientes[0];
+
+        if (cobroMas && otros > 0 && cuotaActual) {
+          const faltaOrd = Math.max(0, (Number(cuotaActual.cuota) || 0) - (Number(cuotaActual.valor_pagado) || 0));
+          const pagoOrd = Math.min(val, faltaOrd);
+          let rem = val - pagoOrd;
+          const asignableExtra = Math.min(rem, otros);
+          rem -= asignableExtra;
+
+          const totalPagadoCuota = (Number(cuotaActual.valor_pagado) || 0) + pagoOrd + asignableExtra;
+          const yaPagada = ((Number(cuotaActual.valor_pagado) || 0) + pagoOrd) >= ((Number(cuotaActual.cuota) || 0) - 0.01);
+
+          await entities.CuotaAmortizacion.update(cuotaActual.id, {
+            valor_pagado: totalPagadoCuota,
+            otros_cobros: (Number(cuotaActual.otros_cobros) || 0) + asignableExtra,
+            estado: yaPagada ? "pagada" : "pendiente",
+            fecha_pago: fechaDoc,
+            abono_id: abono.id
+          });
+
+          if (rem > 0) {
+            for (const sig of cuotasPendientes) {
+              if (sig.id === cuotaActual.id || rem <= 0) continue;
+              const fSig = Math.max(0, (Number(sig.cuota) || 0) - (Number(sig.valor_pagado) || 0));
+              if (fSig <= 0) continue;
+              const pSig = Math.min(rem, fSig);
+              const nuevoPagSig = (Number(sig.valor_pagado) || 0) + pSig;
+              const yaPagSig = nuevoPagSig >= ((Number(sig.cuota) || 0) - 0.01);
+              await entities.CuotaAmortizacion.update(sig.id, {
+                valor_pagado: nuevoPagSig,
+                estado: yaPagSig ? "pagada" : "pendiente",
+                fecha_pago: fechaDoc,
+                abono_id: abono.id
+              });
+              rem -= pSig;
+            }
+          }
+        } else {
+          let rem = val;
+          for (const c of (cuotasPendientes || [])) {
+            if (rem <= 0) break;
+            const falta = Math.max(0, (Number(c.cuota) || 0) - (Number(c.valor_pagado) || 0));
+            if (falta <= 0) continue;
+            const pago = Math.min(rem, falta);
+            const nuevoPagado = (Number(c.valor_pagado) || 0) + pago;
+            const yaPagada = nuevoPagado >= ((Number(c.cuota) || 0) - 0.01);
+            await entities.CuotaAmortizacion.update(c.id, {
+              valor_pagado: nuevoPagado,
+              estado: yaPagada ? "pagada" : "pendiente",
+              fecha_pago: fechaDoc,
+              abono_id: abono.id
+            });
+            rem -= pago;
+          }
+        }
+
         nuevoSaldoIntereses = Math.max(0, (Number(p.saldo_intereses) || 0) - intVal);
         valorProximoPago = nuevoSaldoCapital > 0 ? (nuevoSaldoCapital * (Number(p.tasa_nominal) || 0)) : 0;
       }
@@ -1275,15 +1681,27 @@ export async function gestionarPakredito(entities, payload = {}) {
       detalles: detallesFinales.map((d) => {
         const val = Number(d.valor_aplicado) || 0;
         const intVal = Number(d.intereses) || 0;
+        const cobroMas = Boolean(d.cobro_intereses_de_mas);
+        const otros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
         return {
           prestamo_id: d.prestamo_id,
           valor_aplicado: val,
           intereses: intVal,
-          capital: Math.max(0, val - intVal)
+          cobro_intereses_de_mas: cobroMas,
+          otros_cobros: otros,
+          cuota_id: d.cuota_id || null,
+          cuota_numero: d.cuota_numero || null,
+          capital: Math.max(0, val - intVal - otros)
         };
       }),
       notas: nuevasNotas !== undefined ? nuevasNotas : abono.notas
     });
+
+    for (const d of detallesFinales) {
+      if (d.prestamo_id) {
+        await reconciliarCuotasPrestamo(entities, d.prestamo_id);
+      }
+    }
 
     await recalcularSaldos(entities);
     return { success: true, abono: updatedAbono };
@@ -1549,51 +1967,15 @@ export async function gestionarPakredito(entities, payload = {}) {
     let count = 0;
 
     for (const p of (prestamos || [])) {
-      if (Number(p.saldo_capital) <= 0) {
-        if (p.estado !== "saldado") {
-          await entities.Prestamo.update(p.id, {
-            estado: "saldado",
-            fecha_proximo_pago: null,
-            valor_proximo_pago: 0
-          });
-          count++;
-        }
-        continue;
-      }
-
-      if (p.modelo === "cuota_fija") {
-        const cuotas = await entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
-        const prox = (cuotas || []).sort((a, b) => a.numero - b.numero).find((c) => c.estado !== "pagada");
-        const enMora = prox && prox.fecha_vencimiento < hoy;
-        const nuevoEstado = enMora ? "en_mora" : "vigente";
-        const nuevaFechaProx = prox ? prox.fecha_vencimiento : p.fecha_proximo_pago;
-        const nuevoValorProx = prox ? Math.max(0, (Number(prox.cuota) || 0) - (Number(prox.valor_pagado) || 0)) : p.valor_proximo_pago;
-
-        if (p.estado !== nuevoEstado || p.fecha_proximo_pago !== nuevaFechaProx || p.valor_proximo_pago !== nuevoValorProx) {
-          await entities.Prestamo.update(p.id, {
-            estado: nuevoEstado,
-            fecha_proximo_pago: nuevaFechaProx,
-            valor_proximo_pago: nuevoValorProx
-          });
-          count++;
-        }
-      } else if (p.modelo === "mes_vencido") {
-        const fechaBase = p.fecha_ultimo_abono || p.fecha_prestamo || hoy;
-        const est = estimarInteresesMesVencido(p.saldo_capital, p.tasa_nominal, fechaBase, hoy);
-        const enMora = p.fecha_proximo_pago && p.fecha_proximo_pago < hoy;
-        const nuevoEstado = enMora ? "en_mora" : "vigente";
-        const nuevoInteres = Math.round(est.intereses);
-
-        if (p.estado !== nuevoEstado || Number(p.saldo_intereses) !== nuevoInteres) {
-          await entities.Prestamo.update(p.id, {
-            estado: nuevoEstado,
-            saldo_intereses: nuevoInteres
-          });
-          count++;
-        }
+      try {
+        await reconciliarCuotasPrestamo(entities, p.id);
+        count++;
+      } catch (errP) {
+        console.warn(`Error reconciliando préstamo ${p.codigo || p.id}:`, errP);
       }
     }
 
+    await recalcularSaldos(entities);
     return { success: true, actualizados: count };
   }
 

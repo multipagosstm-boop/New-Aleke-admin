@@ -26,20 +26,27 @@ export default function ProrrocaDialog({ open, onOpenChange, prestamo, clienteNo
   if (!prestamo) return null;
 
   const hoy = hoyLocal();
-  const base = prestamo.fecha_proximo_pago && prestamo.fecha_proximo_pago >= hoy ? prestamo.fecha_proximo_pago : hoy;
+  const base = prestamo.fecha_proximo_pago || hoy;
   const nuevaFecha = addDays(base, dias);
 
   const confirmar = async () => {
     setSaving(true);
     try {
       const cuotas = await base44.entities.CuotaAmortizacion.filter({ prestamo_id: prestamo.id });
-      const pendientes = cuotas.filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
+      let pendientes = (cuotas || []).filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
+      if (pendientes.length === 0 && (cuotas || []).length > 0) {
+        pendientes = [cuotas[cuotas.length - 1]];
+      }
       if (pendientes.length > 0) {
         await base44.entities.CuotaAmortizacion.bulkUpdate(
-          pendientes.map((c) => ({ id: c.id, fecha_vencimiento: addDays(c.fecha_vencimiento, dias) }))
+          pendientes.map((c) => ({
+            id: c.id,
+            fecha_vencimiento: nuevaFecha,
+            estado: (Number(c.valor_pagado) || 0) > 0 ? "parcial" : "pendiente"
+          }))
         );
       }
-      const proxima = pendientes[0] ? addDays(pendientes[0].fecha_vencimiento, dias) : nuevaFecha;
+      const proxima = nuevaFecha;
       const notaLinea = `Prórroga ${hoy}: +${dias} días → nuevo vence ${proxima}${nota ? ". " + nota : ""}`;
       await base44.entities.Prestamo.update(prestamo.id, {
         fecha_proximo_pago: proxima,

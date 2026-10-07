@@ -8,7 +8,7 @@ import SearchableSelect from "@/components/ui/searchable-select";
 import { NumberInput } from "@/components/ui/number-input";
 import CuentaIngresoSelect from "@/components/admin/CuentaIngresoSelect";
 import { formatCOP, formatDate, hoyLocal } from "@/lib/contabilidad";
-import { estimarInteresesMesVencido, proyectarAbonoCuotaFija, sumarPeriodo, calcularSaldoTotalDeber } from "@/lib/pakredito";
+import { estimarInteresesMesVencido, proyectarAbonoCuotaFija, sumarPeriodo, calcularSaldoTotalDeber, generarAmortizacionCuotaFija, generarAmortizacionMesVencido } from "@/lib/pakredito";
 
 export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, clientes, prestamos }) {
   const [clienteId, setClienteId] = useState("");
@@ -17,6 +17,8 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
   const [cuentaIngreso, setCuentaIngreso] = useState({ subcuenta: "", cuenta_ahorro_id: "", producto_credito_id: "" });
   const [aplicaciones, setAplicaciones] = useState({});
   const [interesesInput, setInteresesInput] = useState({});
+  const [cobroInteresesDeMas, setCobroInteresesDeMas] = useState({});
+  const [otrosCobrosInput, setOtrosCobrosInput] = useState({});
   const [cuotasByPrestamo, setCuantosByPrestamo] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -25,7 +27,7 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
     if (!open) return;
     setClienteId(""); setFecha(hoyLocal()); setValorTotal(0);
     setCuentaIngreso({ subcuenta: "", cuenta_ahorro_id: "", producto_credito_id: "" });
-    setAplicaciones({}); setInteresesInput({}); setCuantosByPrestamo({}); setError("");
+    setAplicaciones({}); setInteresesInput({}); setCobroInteresesDeMas({}); setOtrosCobrosInput({}); setCuantosByPrestamo({}); setError("");
   }, [open]);
 
   const creditosCliente = useMemo(
@@ -33,21 +35,30 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
     [prestamos, clienteId]
   );
 
-  // Cargar cuotas de los créditos de cuota fija del cliente (para mostrar cuota actual e intereses)
+  // Cargar cuotas de todos los créditos del cliente (para cuota actual, intereses y amortización)
   useEffect(() => {
     if (!clienteId) { setCuantosByPrestamo({}); return; }
-    const cfIds = creditosCliente.filter((p) => p.modelo === "cuota_fija").map((p) => p.id);
-    if (cfIds.length === 0) { setCuantosByPrestamo({}); return; }
+    const todosIds = creditosCliente.map((p) => p.id);
+    if (todosIds.length === 0) { setCuantosByPrestamo({}); return; }
     let alive = true;
     (async () => {
       try {
         const results = await Promise.all(
-          cfIds.map((id) => base44.entities.CuotaAmortizacion.filter({ prestamo_id: id }))
+          todosIds.map((id) => base44.entities.CuotaAmortizacion.filter({ prestamo_id: id }))
         );
         if (!alive) return;
         const map = {};
-        cfIds.forEach((id, i) => {
-          const arr = [...(results[i] || [])].sort((a, b) => a.numero - b.numero);
+        todosIds.forEach((id, i) => {
+          let arr = [...(results[i] || [])].sort((a, b) => a.numero - b.numero);
+          if (arr.length === 0) {
+            const pObj = creditosCliente.find((x) => x.id === id);
+            if (pObj) {
+              const gen = pObj.modelo === "cuota_fija"
+                ? generarAmortizacionCuotaFija(pObj.capital, pObj.tasa_nominal, pObj.periodo || "mensual", pObj.numero_cuotas, pObj.fecha_prestamo, pObj.cuota_fija)
+                : generarAmortizacionMesVencido(pObj.capital, pObj.tasa_nominal, pObj.periodo || "mensual", pObj.numero_cuotas, pObj.fecha_prestamo);
+              arr = gen.schedule || [];
+            }
+          }
           map[id] = arr;
         });
         setCuantosByPrestamo(map);
@@ -94,20 +105,43 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
         accion: "registrarAbono",
         cliente_id: clienteId, fecha, valor_total: valorTotal, cuenta_ingreso: cuentaIngreso,
         detalles: seleccionados.map((p) => {
-          if (p.modelo === "cuota_fija") {
-            const cuotas = cuotasByPrestamo[p.id] || [];
-            const proy = proyectarAbonoCuotaFija(cuotas, Number(aplicaciones[p.id]) || 0);
-            const defInteres = proy.intereses + proy.exceso;
-            return {
-              prestamo_id: p.id,
-              valor_aplicado: Number(aplicaciones[p.id]) || 0,
-              intereses: (interesesInput[p.id] !== undefined && interesesInput[p.id] !== "") ? Number(interesesInput[p.id]) : defInteres
-            };
-          }
+          const cuotas = cuotasByPrestamo[p.id] || [];
+          const cuotaActual = cuotas.find((c) => c.estado !== "pagada") || cuotas[0];
+          const proy = p.modelo === "cuota_fija" ? proyectarAbonoCuotaFija(cuotas, Number(aplicaciones[p.id]) || 0) : null;
+          const defInteres = proy ? (proy.intereses + proy.exceso) : 0;
+          const estim = p.modelo === "mes_vencido"
+            ? estimarInteresesMesVencido(p.saldo_capital, p.tasa_nominal, p.fecha_ultimo_abono || p.fecha_prestamo, fecha)
+            : null;
+          const baseInteres = p.modelo === "cuota_fija" ? (cuotaActual?.interes || defInteres) : (estim?.intereses || cuotaActual?.interes || 0);
+
+          const cobroMas = Boolean(cobroInteresesDeMas[p.id]);
+          const valorAplicado = Number(aplicaciones[p.id]) || 0;
+          const valorCuotaEsperada = cuotaActual
+            ? (Number(cuotaActual.cuota) || 0)
+            : (p.modelo === "cuota_fija" ? (Number(p.cuota_fija) || 0) : (Number(baseInteres) + (Number(p.saldo_capital) / Math.max(1, p.numero_cuotas || 1))));
+          const intIngresado = (interesesInput[p.id] !== undefined && interesesInput[p.id] !== "")
+            ? Number(interesesInput[p.id])
+            : (p.modelo === "cuota_fija" ? defInteres : Math.round(Number(baseInteres)));
+          const excesoInteresCampo = Math.max(0, intIngresado - Math.round(baseInteres));
+          const excesoSobreCuota = Math.max(0, valorAplicado - Math.round(valorCuotaEsperada));
+          const excCalculado = excesoInteresCampo > 0 ? excesoInteresCampo : excesoSobreCuota;
+
+          const otrosCobros = cobroMas
+            ? (otrosCobrosInput[p.id] !== undefined ? Number(otrosCobrosInput[p.id]) : excCalculado)
+            : 0;
+
+          const intVal = (intIngresado > otrosCobros && otrosCobros > 0)
+            ? (intIngresado - otrosCobros)
+            : intIngresado;
+
           return {
             prestamo_id: p.id,
-            valor_aplicado: Number(aplicaciones[p.id]) || 0,
-            intereses: (interesesInput[p.id] !== undefined && interesesInput[p.id] !== "") ? Number(interesesInput[p.id]) : 0
+            valor_aplicado: valorAplicado,
+            intereses: intVal,
+            cobro_intereses_de_mas: cobroMas,
+            otros_cobros: otrosCobros,
+            cuota_id: cuotaActual?.id || null,
+            cuota_numero: cuotaActual?.numero || null
           };
         })
       });
@@ -250,6 +284,83 @@ export default function AbonoPrestamoForm({ open, onOpenChange, onSaved, cliente
                                 <b>ℹ️ Pago de solo intereses:</b> El capital ({formatCOP(p.saldo_capital)}) se mantiene intacto y el crédito se <b>prorrogará automáticamente</b> hasta el siguiente plazo ({formatDate(sumarPeriodo(p.fecha_proximo_pago || fecha, p.periodo || "mensual", 1))}).
                               </div>
                             )}
+
+                            {/* Opción de cobro de intereses de más -> Otros cobros */}
+                            {(() => {
+                              const interesBase = p.modelo === "cuota_fija"
+                                ? (cuotaActual?.interes || 0)
+                                : (estim?.intereses || cuotaActual?.interes || 0);
+                              const intIngresado = (interesesInput[p.id] !== undefined && interesesInput[p.id] !== "")
+                                ? Number(interesesInput[p.id])
+                                : (p.modelo === "cuota_fija" ? interesProyectado : Math.round(Number(interesBase)));
+                              const abonoAplicado = Number(aplicaciones[p.id]) || 0;
+                              const valorCuotaEsperada = cuotaActual
+                                ? (Number(cuotaActual.cuota) || 0)
+                                : (p.modelo === "cuota_fija" ? (Number(p.cuota_fija) || 0) : (Number(interesBase) + (Number(p.saldo_capital) / Math.max(1, p.numero_cuotas || 1))));
+                              const excesoInteresCampo = Math.max(0, intIngresado - Math.round(interesBase));
+                              const excesoSobreCuota = Math.max(0, abonoAplicado - Math.round(valorCuotaEsperada));
+                              const excesoSugerido = excesoInteresCampo > 0 ? excesoInteresCampo : excesoSobreCuota;
+                              const esCobroMas = Boolean(cobroInteresesDeMas[p.id]);
+
+                              return (
+                                <div className="pt-2 border-t border-border/50 text-xs space-y-1.5">
+                                  <label className="flex items-start gap-2 cursor-pointer select-none">
+                                    <input
+                                      type="checkbox"
+                                      checked={esCobroMas}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setCobroInteresesDeMas((prev) => ({ ...prev, [p.id]: checked }));
+                                        if (checked && (otrosCobrosInput[p.id] === undefined || otrosCobrosInput[p.id] === 0)) {
+                                          setOtrosCobrosInput((prev) => ({ ...prev, [p.id]: excesoSugerido }));
+                                        }
+                                      }}
+                                      className="mt-0.5 h-4 w-4 rounded border-input text-primary"
+                                    />
+                                    <div className="flex-1 space-y-1">
+                                      <div className="flex items-center gap-2 flex-wrap font-medium text-foreground">
+                                        <span>¿Se cobraron intereses de más? Destinar a &quot;Otros cobros&quot; / &quot;Cobro extra&quot;</span>
+                                        {esCobroMas && (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 font-semibold border border-amber-500/30">
+                                            Activado
+                                          </span>
+                                        )}
+                                      </div>
+                                      {esCobroMas ? (
+                                        <div className="space-y-1.5 pl-0.5 mt-1">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-[11px] text-muted-foreground">Valor extra a registrar en Otros cobros:</span>
+                                            <div className="w-36">
+                                              <NumberInput
+                                                value={otrosCobrosInput[p.id] !== undefined ? otrosCobrosInput[p.id] : excesoSugerido}
+                                                onChange={(v) => setOtrosCobrosInput((prev) => ({ ...prev, [p.id]: v }))}
+                                                className="h-7 text-xs text-right font-mono text-amber-600 dark:text-amber-400 font-bold"
+                                              />
+                                            </div>
+                                            {excesoSugerido > 0 && (
+                                              <button
+                                                type="button"
+                                                className="text-[10px] text-primary hover:underline"
+                                                onClick={() => setOtrosCobrosInput((prev) => ({ ...prev, [p.id]: excesoSugerido }))}
+                                              >
+                                                (Sugerido: {formatCOP(excesoSugerido)})
+                                              </button>
+                                            )}
+                                          </div>
+                                          <p className="text-[11px] text-amber-800 dark:text-amber-300 bg-amber-500/10 p-2 rounded border border-amber-500/20 leading-relaxed">
+                                            ✓ Este saldo de más cobrado se sumará en la columna <b>&quot;Otros cobros&quot;</b> de la cuota en la amortización una vez cubiertos los intereses y capital ordinarios, sin aplicarse para adelantar la cuota siguiente.
+                                          </p>
+                                        </div>
+                                      ) : (
+                                        <p className="text-[10px] text-muted-foreground">
+                                          En caso contrario, cualquier saldo que sobrepase la cuota se aplica automáticamente para la cuota siguiente (comportamiento natural).
+                                        </p>
+                                      )}
+                                    </div>
+                                  </label>
+                                </div>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>

@@ -52,12 +52,23 @@ export default function EditarAbonoDialog({
       ? abono.detalles
       : (typeof abono.detalles === "string" ? JSON.parse(abono.detalles || "[]") : []);
 
-    setDetalles(det.map((d) => ({
-      prestamo_id: d.prestamo_id,
-      valor_aplicado: Number(d.valor_aplicado) || 0,
-      intereses: Number(d.intereses) || 0,
-      capital: d.capital !== undefined ? Number(d.capital) : Math.max(0, (Number(d.valor_aplicado) || 0) - (Number(d.intereses) || 0))
-    })));
+    setDetalles(det.map((d) => {
+      const cobroMas = Boolean(d.cobro_intereses_de_mas || Number(d.otros_cobros) > 0);
+      const otros = Number(d.otros_cobros) || 0;
+      const val = Number(d.valor_aplicado) || 0;
+      const intVal = Number(d.intereses) || 0;
+      const cap = d.capital !== undefined ? Number(d.capital) : Math.max(0, val - intVal - (cobroMas ? otros : 0));
+      return {
+        prestamo_id: d.prestamo_id,
+        valor_aplicado: val,
+        intereses: intVal,
+        cobro_intereses_de_mas: cobroMas,
+        otros_cobros: otros,
+        capital: cap,
+        cuota_id: d.cuota_id || null,
+        cuota_numero: d.cuota_numero || null
+      };
+    }));
   }, [open, abono]);
 
   if (!abono) return null;
@@ -69,11 +80,13 @@ export default function EditarAbonoDialog({
     setDetalles((prev) => {
       const copy = [...prev];
       const item = { ...copy[index] };
-      const numVal = Number(val) || 0;
-      item[field] = numVal;
-      if (field === "valor_aplicado" || field === "intereses") {
-        item.capital = Math.max(0, (Number(item.valor_aplicado) || 0) - (Number(item.intereses) || 0));
+      if (typeof val === "boolean") {
+        item[field] = val;
+      } else {
+        item[field] = Number(val) || 0;
       }
+      const otros = item.cobro_intereses_de_mas ? (Number(item.otros_cobros) || 0) : 0;
+      item.capital = Math.max(0, (Number(item.valor_aplicado) || 0) - (Number(item.intereses) || 0) - otros);
       copy[index] = item;
       return copy;
     });
@@ -214,6 +227,34 @@ export default function EditarAbonoDialog({
                           {formatCOP(d.capital)}
                         </div>
                       </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-border/40 text-xs space-y-1.5">
+                      <label className="flex items-start gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(d.cobro_intereses_de_mas)}
+                          onChange={(e) => handleDetalleChange(idx, "cobro_intereses_de_mas", e.target.checked)}
+                          className="mt-0.5 h-4 w-4 rounded border-input text-primary"
+                        />
+                        <div className="flex-1 space-y-1">
+                          <span className="font-medium text-foreground block">
+                            ¿Se cobraron intereses de más? Destinar a &quot;Otros cobros&quot; / &quot;Cobro extra&quot;
+                          </span>
+                          {d.cobro_intereses_de_mas && (
+                            <div className="flex items-center gap-2 flex-wrap mt-1">
+                              <span className="text-[11px] text-muted-foreground">Valor en Otros cobros:</span>
+                              <div className="w-36">
+                                <NumberInput
+                                  value={d.otros_cobros || 0}
+                                  onChange={(val) => handleDetalleChange(idx, "otros_cobros", val)}
+                                  className="h-7 text-xs text-right font-mono text-amber-600 dark:text-amber-400 font-bold"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </label>
                     </div>
                   </div>
                 );

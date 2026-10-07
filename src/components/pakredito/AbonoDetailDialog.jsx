@@ -143,6 +143,7 @@ export default function AbonoDetailDialog({
                     <th className="px-3 py-2 font-medium text-right">Valor Aplicado</th>
                     <th className="px-3 py-2 font-medium text-right">Abono Capital</th>
                     <th className="px-3 py-2 font-medium text-right">Intereses</th>
+                    <th className="px-3 py-2 font-medium text-right text-amber-600 dark:text-amber-400">Otros Cobros</th>
                     <th className="px-3 py-2 font-medium text-right">Saldo Capital Actual</th>
                     <th className="px-3 py-2 font-medium text-center">Estado Préstamo</th>
                   </tr>
@@ -152,7 +153,8 @@ export default function AbonoDetailDialog({
                     const p = prestamos.find((pr) => String(pr.id) === String(d.prestamo_id) || (pr.codigo && String(pr.codigo).toLowerCase() === String(d.prestamo_id).toLowerCase())) || {};
                     const aplicado = Number(d.valor_aplicado) || 0;
                     const intereses = Number(d.intereses) || 0;
-                    const capital = d.capital !== undefined ? Number(d.capital) : Math.max(0, aplicado - intereses);
+                    const otros = Number(d.otros_cobros) || 0;
+                    const capital = d.capital !== undefined ? Number(d.capital) : Math.max(0, aplicado - intereses - otros);
                     return (
                       <tr key={idx} className="hover:bg-muted/20">
                         <td className="px-3 py-2 font-mono font-semibold text-primary">{p.codigo || d.prestamo_id}</td>
@@ -160,6 +162,9 @@ export default function AbonoDetailDialog({
                         <td className="px-3 py-2 text-right font-mono font-semibold">{formatCOP(aplicado)}</td>
                         <td className="px-3 py-2 text-right font-mono text-foreground">{formatCOP(capital)}</td>
                         <td className="px-3 py-2 text-right font-mono text-muted-foreground">{formatCOP(intereses)}</td>
+                        <td className={`px-3 py-2 text-right font-mono ${otros > 0 ? "font-semibold text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
+                          {otros > 0 ? formatCOP(otros) : "—"}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono">{formatCOP(p.saldo_capital ?? 0)}</td>
                         <td className="px-3 py-2 text-center">
                           <Badge variant={p.estado === "saldado" ? "outline" : "secondary"} className="text-[10px]">

@@ -66,6 +66,7 @@ export function generarAmortizacionCuotaFija(capital, tasaNominal, periodo, nume
       numero: n,
       fecha_vencimiento: sumarPeriodo(fechaInicio, periodo, n),
       cuota, interes, capital_abono: cap,
+      otros_cobros: 0,
       saldo_capital: Math.max(0, saldo),
       estado: "pendiente", valor_pagado: 0
     });
@@ -104,6 +105,7 @@ export function generarAmortizacionMesVencido(capital, tasaNominal, arg3, arg4?,
       numero: n,
       fecha_vencimiento: sumarPeriodo(fechaInicio, periodo, n),
       cuota: cap + interes, interes, capital_abono: cap,
+      otros_cobros: 0,
       saldo_capital: Math.max(0, saldo),
       estado: "pendiente", valor_pagado: 0
     });
@@ -245,25 +247,65 @@ export async function crearPrestamo(base44, user, params) {
   return { prestamo, schedule: gen.schedule, warnings, comprobante };
 }
 
-async function aplicarAbonoCuotaFija(base44, prestamo, valorAplicado, intereses, fecha, abonoId) {
+async function aplicarAbonoCuotaFija(base44, prestamo, valorAplicado, intereses, fecha, abonoId, cobroMas = false, otrosCobros = 0) {
   const cuotas = await base44.asServiceRole.entities.CuotaAmortizacion.filter({ prestamo_id: prestamo.id });
   cuotas.sort((a, b) => a.numero - b.numero);
-  let restante = valorAplicado;
-  for (const c of cuotas) {
-    if (restante <= 0) break;
-    if (c.estado === "pagada") continue;
-    const saldoCuota = c.cuota - (c.valor_pagado || 0);
-    const pago = Math.min(saldoCuota, restante);
-    const nuevoValorPagado = (c.valor_pagado || 0) + pago;
-    const nuevoEstado = nuevoValorPagado >= c.cuota - 0.01 ? "pagada" : "parcial";
-    await base44.asServiceRole.entities.CuotaAmortizacion.update(c.id, {
-      valor_pagado: nuevoValorPagado, estado: nuevoEstado, fecha_pago: fecha, abono_id: abonoId
-    });
-    restante -= pago;
+
+  if (cobroMas && otrosCobros > 0) {
+    const c = cuotas.find((x) => x.estado !== "pagada");
+    if (c) {
+      const faltaOrd = Math.max(0, (c.cuota || 0) - (c.valor_pagado || 0));
+      const pagoOrd = Math.min(valorAplicado, faltaOrd);
+      let rem = valorAplicado - pagoOrd;
+      const asignadoExtra = Math.min(rem, otrosCobros);
+      rem -= asignadoExtra;
+
+      const totalPagadoCuota = (c.valor_pagado || 0) + pagoOrd + asignadoExtra;
+      const yaPagada = ((c.valor_pagado || 0) + pagoOrd) >= ((c.cuota || 0) - 0.01);
+
+      await base44.asServiceRole.entities.CuotaAmortizacion.update(c.id, {
+        valor_pagado: totalPagadoCuota,
+        otros_cobros: (Number(c.otros_cobros) || 0) + asignadoExtra,
+        estado: yaPagada ? "pagada" : "parcial",
+        fecha_pago: fecha,
+        abono_id: abonoId
+      });
+
+      if (rem > 0) {
+        for (const sig of cuotas) {
+          if (sig.id === c.id || sig.estado === "pagada" || rem <= 0) continue;
+          const fSig = Math.max(0, (sig.cuota || 0) - (sig.valor_pagado || 0));
+          if (fSig <= 0) continue;
+          const pSig = Math.min(rem, fSig);
+          const nuevoPagSig = (sig.valor_pagado || 0) + pSig;
+          const yaPagSig = nuevoPagSig >= ((sig.cuota || 0) - 0.01);
+          await base44.asServiceRole.entities.CuotaAmortizacion.update(sig.id, {
+            valor_pagado: nuevoPagSig,
+            estado: yaPagSig ? "pagada" : "parcial",
+            fecha_pago: fecha,
+            abono_id: abonoId
+          });
+          rem -= pSig;
+        }
+      }
+    }
+  } else {
+    let restante = valorAplicado;
+    for (const c of cuotas) {
+      if (restante <= 0) break;
+      if (c.estado === "pagada") continue;
+      const saldoCuota = c.cuota - (c.valor_pagado || 0);
+      const pago = Math.min(saldoCuota, restante);
+      const nuevoValorPagado = (c.valor_pagado || 0) + pago;
+      const nuevoEstado = nuevoValorPagado >= c.cuota - 0.01 ? "pagada" : "parcial";
+      await base44.asServiceRole.entities.CuotaAmortizacion.update(c.id, {
+        valor_pagado: nuevoValorPagado, estado: nuevoEstado, fecha_pago: fecha, abono_id: abonoId
+      });
+      restante -= pago;
+    }
   }
-  // El capital aplicado al saldo = abono − intereses (intereses que el usuario
-  // define; la proyección por cuota se usa solo si no se indicó un valor).
-  const capitalAplicado = Math.max(0, valorAplicado - intereses);
+
+  const capitalAplicado = Math.max(0, valorAplicado - intereses - (cobroMas ? otrosCobros : 0));
   const nuevoSaldo = Math.max(0, prestamo.saldo_capital - capitalAplicado);
   const actualizadas = await base44.asServiceRole.entities.CuotaAmortizacion.filter({ prestamo_id: prestamo.id });
   const pendientes = actualizadas.filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
@@ -278,24 +320,65 @@ async function aplicarAbonoCuotaFija(base44, prestamo, valorAplicado, intereses,
   });
 }
 
-async function aplicarAbonoMesVencido(base44, prestamo, valorAplicado, intereses, fecha, abonoId) {
+async function aplicarAbonoMesVencido(base44, prestamo, valorAplicado, intereses, fecha, abonoId, cobroMas = false, otrosCobros = 0) {
   const { dias, intereses: interesesGenerados } = estimarInteresesMesVencido(
     prestamo.saldo_capital, prestamo.tasa_nominal, prestamo.fecha_ultimo_abono || prestamo.fecha_prestamo, fecha
   );
   const estimacion = (prestamo.saldo_intereses || 0) + interesesGenerados;
-  const capitalAplicado = Math.max(0, valorAplicado - intereses);
+  const capitalAplicado = Math.max(0, valorAplicado - intereses - (cobroMas ? otrosCobros : 0));
   const nuevoSaldoIntereses = Math.max(0, estimacion - intereses);
   const nuevoSaldoCapital = Math.max(0, prestamo.saldo_capital - capitalAplicado);
 
   const existentes = await base44.asServiceRole.entities.CuotaAmortizacion.filter({ prestamo_id: prestamo.id });
-  const numero = existentes.length + 1;
-  await base44.asServiceRole.entities.CuotaAmortizacion.create({
-    prestamo_id: prestamo.id, numero,
-    fecha_vencimiento: fecha,
-    cuota: valorAplicado, interes: intereses, capital_abono: capitalAplicado,
-    saldo_capital: nuevoSaldoCapital, estado: "pagada", valor_pagado: valorAplicado,
-    fecha_pago: fecha, abono_id: abonoId
-  });
+  const pendientes = (existentes || []).filter((c) => c.estado !== "pagada").sort((a, b) => a.numero - b.numero);
+
+  if (pendientes.length > 0) {
+    const cuotaActual = pendientes[0];
+    const faltaOrd = Math.max(0, (cuotaActual.cuota || 0) - (cuotaActual.valor_pagado || 0));
+    const pagoOrd = Math.min(valorAplicado, faltaOrd);
+    let rem = valorAplicado - pagoOrd;
+    const asignableExtra = (cobroMas && otrosCobros > 0) ? Math.min(rem, otrosCobros) : 0;
+    rem -= asignableExtra;
+
+    const totalPagadoCuota = (cuotaActual.valor_pagado || 0) + pagoOrd + asignableExtra;
+    const yaPagada = ((cuotaActual.valor_pagado || 0) + pagoOrd) >= ((cuotaActual.cuota || 0) - 0.01);
+
+    await base44.asServiceRole.entities.CuotaAmortizacion.update(cuotaActual.id, {
+      valor_pagado: totalPagadoCuota,
+      otros_cobros: (Number(cuotaActual.otros_cobros) || 0) + (cobroMas ? otrosCobros : 0),
+      estado: yaPagada ? "pagada" : (totalPagadoCuota > 0 ? "parcial" : "pendiente"),
+      fecha_pago: fecha,
+      abono_id: abonoId
+    });
+
+    if (rem > 0) {
+      for (const sig of pendientes) {
+        if (sig.id === cuotaActual.id || rem <= 0) continue;
+        const fSig = Math.max(0, (sig.cuota || 0) - (sig.valor_pagado || 0));
+        if (fSig <= 0) continue;
+        const pSig = Math.min(rem, fSig);
+        const nuevoPagSig = (sig.valor_pagado || 0) + pSig;
+        const yaPagSig = nuevoPagSig >= ((sig.cuota || 0) - 0.01);
+        await base44.asServiceRole.entities.CuotaAmortizacion.update(sig.id, {
+          valor_pagado: nuevoPagSig,
+          estado: yaPagSig ? "pagada" : "parcial",
+          fecha_pago: fecha,
+          abono_id: abonoId
+        });
+        rem -= pSig;
+      }
+    }
+  } else {
+    const numero = (existentes || []).length + 1;
+    await base44.asServiceRole.entities.CuotaAmortizacion.create({
+      prestamo_id: prestamo.id, numero,
+      fecha_vencimiento: fecha,
+      cuota: valorAplicado, interes: intereses, capital_abono: capitalAplicado,
+      otros_cobros: cobroMas ? otrosCobros : 0,
+      saldo_capital: nuevoSaldoCapital, estado: "pagada", valor_pagado: valorAplicado,
+      fecha_pago: fecha, abono_id: abonoId
+    });
+  }
 
   const hoy = new Date().toISOString().substring(0, 10);
   const periodoCredito = prestamo.periodo || "mensual";
@@ -307,7 +390,7 @@ async function aplicarAbonoMesVencido(base44, prestamo, valorAplicado, intereses
     proximaFecha = sumarPeriodo(fecha, periodoCredito, 1);
   }
   const notaProrroga = (capitalAplicado <= 0 && intereses > 0)
-    ? `Prórroga por pago de intereses (${fecha}): +1 ${periodoCredito} → nuevo vence ${proximaFecha}`
+    ? `Prórroga por pago de intereses (${fecha}): +1 ${periodoCredito} → nuevo vence ${proximaFecha}${otrosCobros > 0 ? ` (Cobro extra: $${otrosCobros})` : ""}`
     : "";
   const notasFinales = notaProrroga ? (prestamo.notas ? `${prestamo.notas}\n${notaProrroga}` : notaProrroga) : (prestamo.notas || "");
 
@@ -354,29 +437,29 @@ export async function registrarAbono(base44, user, params) {
     const d = detalles[idx];
     const p = prestamos[idx];
     const valorAplicado = Number(d.valor_aplicado) || 0;
+    const cobroMas = Boolean(d.cobro_intereses_de_mas);
+    let otrosCobros = cobroMas ? Math.round(Number(d.otros_cobros) || 0) : 0;
     let intereses = 0;
     if (p.modelo === "cuota_fija") {
       const interesesInput = Number(d.intereses);
       if (Number.isFinite(interesesInput) && interesesInput >= 0) {
-        // El usuario tiene la última palabra sobre los intereses a cobrar.
         intereses = Math.min(interesesInput, valorAplicado);
       } else {
         const cuotas = await base44.asServiceRole.entities.CuotaAmortizacion.filter({ prestamo_id: p.id });
         cuotas.sort((a, b) => a.numero - b.numero);
         const proy = proyectarAbonoCuotaFija(cuotas, valorAplicado);
-        // El exceso (abono superior a capital + intereses pendientes) se aplica como ingreso de intereses.
         intereses = proy.intereses + proy.exceso;
       }
     } else {
       intereses = Number(d.intereses) || 0;
     }
+    const capital = Math.max(0, valorAplicado - intereses - otrosCobros);
     detallesCalculados.push({
-      prestamo: p, valorAplicado, intereses,
-      capital: Math.max(0, valorAplicado - intereses)
+      prestamo: p, valorAplicado, intereses, cobroMas, otrosCobros, capital
     });
   }
 
-  // Movimiento de ingreso (débito) sobre la cuenta seleccionada (CDA, efectivo, TDC, cruce, etc.)
+  // Movimiento de ingreso (débito) sobre la cuenta seleccionada
   const movimientos = [];
   movimientos.push({
     subcuenta: cuenta_ingreso.subcuenta, debito: valor_total, credito: 0,
@@ -392,6 +475,12 @@ export async function registrarAbono(base44, user, params) {
       movimientos.push({
         subcuenta: SUBCUENTA_INTERESES, debito: 0, credito: dc.intereses,
         descripcion: `Intereses ${dc.prestamo.codigo}`, tercero, cliente_id
+      });
+    }
+    if (dc.otrosCobros > 0) {
+      movimientos.push({
+        subcuenta: SUBCUENTA_INTERESES, debito: 0, credito: dc.otrosCobros,
+        descripcion: `Otros cobros / Cobro extra ${dc.prestamo.codigo}`, tercero, cliente_id
       });
     }
     if (dc.capital > 0) {
@@ -414,18 +503,21 @@ export async function registrarAbono(base44, user, params) {
     cda_id: cuenta_ingreso.cuenta_ahorro_id || "",
     detalles: detallesCalculados.map((dc) => ({
       prestamo_id: dc.prestamo.id, valor_aplicado: dc.valorAplicado,
-      intereses: dc.intereses, capital: dc.capital
+      intereses: dc.intereses, cobro_intereses_de_mas: dc.cobroMas, otros_cobros: dc.otrosCobros, capital: dc.capital
     })),
     notas: notas || ""
   });
 
   for (const dc of detallesCalculados) {
     if (dc.prestamo.modelo === "cuota_fija") {
-      await aplicarAbonoCuotaFija(base44, dc.prestamo, dc.valorAplicado, dc.intereses, fecha, abono.id);
+      await aplicarAbonoCuotaFija(base44, dc.prestamo, dc.valorAplicado, dc.intereses, fecha, abono.id, dc.cobroMas, dc.otrosCobros);
     } else {
-      await aplicarAbonoMesVencido(base44, dc.prestamo, dc.valorAplicado, dc.intereses, fecha, abono.id);
+      await aplicarAbonoMesVencido(base44, dc.prestamo, dc.valorAplicado, dc.intereses, fecha, abono.id, dc.cobroMas, dc.otrosCobros);
     }
   }
+
+  return { abono, comprobante, warnings };
+}
 
   return { abono, comprobante, warnings };
 }

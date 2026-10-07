@@ -140,19 +140,22 @@ function getMemoryCollection(table) {
 
 function deduplicateById(items) {
   if (!Array.isArray(items)) return [];
-  const seen = new Set();
-  const result = [];
+  const map = new Map();
   for (const item of items) {
     if (!item) continue;
     const id = item.id;
     if (id !== undefined && id !== null) {
       const idStr = String(id);
-      if (seen.has(idStr)) continue;
-      seen.add(idStr);
+      if (map.has(idStr)) {
+        map.set(idStr, { ...map.get(idStr), ...item });
+      } else {
+        map.set(idStr, { ...item });
+      }
+    } else {
+      map.set(Symbol(), item);
     }
-    result.push(item);
   }
-  return result;
+  return Array.from(map.values());
 }
 
 // RLS Error Handler and Detector
@@ -226,6 +229,12 @@ const KNOWN_TABLE_COLUMNS = {
     'id', 'created_date', 'updated_date', 'created_by_id', 'is_sample',
     'table_name', 'record_id', 'action', 'action_type',
     'user_id', 'user_email', 'payload', 'metadata'
+  ]),
+  cuota_amortizacion: new Set([
+    'id', 'created_date', 'updated_date', 'created_by_id', 'is_sample',
+    'prestamo_id', 'numero', 'fecha_vencimiento', 'cuota', 'interes',
+    'capital_abono', 'saldo_capital', 'estado', 'valor_pagado',
+    'fecha_pago', 'abono_id'
   ])
 };
 
@@ -552,6 +561,11 @@ export function createEntityRepository(entityName) {
         savedData = payload;
       }
 
+      if (rawPayload.otros_cobros !== undefined) {
+        savedData = { ...savedData, otros_cobros: rawPayload.otros_cobros };
+        getMemoryCollection(table).set(id, savedData);
+      }
+
       // Record in audit log with captured action type
       recordAuditLog({
         table,
@@ -623,6 +637,11 @@ export function createEntityRepository(entityName) {
         const existing = coll.get(id) || { id };
         updatedData = { ...existing, ...payload };
         coll.set(id, updatedData);
+      }
+
+      if (rawPayload.otros_cobros !== undefined) {
+        updatedData = { ...updatedData, otros_cobros: rawPayload.otros_cobros };
+        getMemoryCollection(table).set(id, updatedData);
       }
 
       // Record in audit log with captured action type

@@ -18,8 +18,9 @@ export default function AmortizacionTable({ cuotas = [] }) {
     cuota: acc.cuota + (Number(c.cuota) || 0),
     interes: acc.interes + (Number(c.interes) || 0),
     capital: acc.capital + (Number(c.capital_abono) || 0),
+    otros_cobros: acc.otros_cobros + (Number(c.otros_cobros || c.cobro_extra) || 0),
     pagado: acc.pagado + (Number(c.valor_pagado) || 0)
-  }), { cuota: 0, interes: 0, capital: 0, pagado: 0 });
+  }), { cuota: 0, interes: 0, capital: 0, otros_cobros: 0, pagado: 0 });
 
   return (
     <div className="border border-border rounded-lg overflow-x-auto max-h-[50vh] overflow-y-auto">
@@ -31,26 +32,33 @@ export default function AmortizacionTable({ cuotas = [] }) {
             <th className="px-2 py-2 font-medium text-right">Cuota</th>
             <th className="px-2 py-2 font-medium text-right">Interés</th>
             <th className="px-2 py-2 font-medium text-right">Capital</th>
+            <th className="px-2 py-2 font-medium text-right text-amber-600 dark:text-amber-400" title="Otros cobros / Cobro extra (Intereses cobrados de más)">Otros cobros</th>
             <th className="px-2 py-2 font-medium text-right">Saldo</th>
             <th className="px-2 py-2 font-medium text-center">Estado</th>
             <th className="px-2 py-2 font-medium text-right">Pagado</th>
           </tr>
         </thead>
         <tbody>
-          {ordenadas.map((c) => (
-            <tr key={c.id || c.numero} className="border-b border-border/40">
-              <td className="px-2 py-1.5 font-mono">{c.numero}</td>
-              <td className="px-2 py-1.5 font-mono">{formatDate(c.fecha_vencimiento)}</td>
-              <td className="px-2 py-1.5 text-right font-mono">{formatCOP(c.cuota)}</td>
-              <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{formatCOP(c.interes)}</td>
-              <td className="px-2 py-1.5 text-right font-mono">{formatCOP(c.capital_abono)}</td>
-              <td className="px-2 py-1.5 text-right font-mono">{formatCOP(c.saldo_capital)}</td>
-              <td className="px-2 py-1.5 text-center">
-                <Badge variant={ESTADO_VARIANT[c.estado] || "outline"} className="text-[10px]">{c.estado}</Badge>
-              </td>
-              <td className="px-2 py-1.5 text-right font-mono">{formatCOP(c.valor_pagado || 0)}</td>
-            </tr>
-          ))}
+          {ordenadas.map((c) => {
+            const extra = Number(c.otros_cobros || c.cobro_extra) || 0;
+            return (
+              <tr key={c.id || c.numero} className="border-b border-border/40">
+                <td className="px-2 py-1.5 font-mono">{c.numero}</td>
+                <td className="px-2 py-1.5 font-mono">{formatDate(c.fecha_vencimiento)}</td>
+                <td className="px-2 py-1.5 text-right font-mono">{formatCOP(c.cuota)}</td>
+                <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{formatCOP(c.interes)}</td>
+                <td className="px-2 py-1.5 text-right font-mono">{formatCOP(c.capital_abono)}</td>
+                <td className={`px-2 py-1.5 text-right font-mono ${extra > 0 ? "font-semibold text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
+                  {extra > 0 ? formatCOP(extra) : "—"}
+                </td>
+                <td className="px-2 py-1.5 text-right font-mono">{formatCOP(c.saldo_capital)}</td>
+                <td className="px-2 py-1.5 text-center">
+                  <Badge variant={ESTADO_VARIANT[c.estado] || "outline"} className="text-[10px]">{c.estado}</Badge>
+                </td>
+                <td className="px-2 py-1.5 text-right font-mono font-medium">{formatCOP(c.valor_pagado || 0)}</td>
+              </tr>
+            );
+          })}
         </tbody>
         <tfoot className="bg-muted/40 border-t-2 border-border sticky bottom-0">
           <tr className="font-semibold text-xs">
@@ -58,6 +66,9 @@ export default function AmortizacionTable({ cuotas = [] }) {
             <td className="px-2 py-2 text-right font-mono">{formatCOP(totales.cuota)}</td>
             <td className="px-2 py-2 text-right font-mono">{formatCOP(totales.interes)}</td>
             <td className="px-2 py-2 text-right font-mono">{formatCOP(totales.capital)}</td>
+            <td className="px-2 py-2 text-right font-mono text-amber-600 dark:text-amber-400">
+              {totales.otros_cobros > 0 ? formatCOP(totales.otros_cobros) : "—"}
+            </td>
             <td className="px-2 py-2"></td>
             <td className="px-2 py-2"></td>
             <td className="px-2 py-2 text-right font-mono">{formatCOP(totales.pagado)}</td>
