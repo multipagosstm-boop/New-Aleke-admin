@@ -1,8 +1,10 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { formatCOP, BANCO_NAMES } from "@/lib/contabilidad";
-import { Building2, User, Wallet, FileText, Hash } from "lucide-react";
+import { Building2, User, Wallet, FileText, Hash, FileSpreadsheet } from "lucide-react";
 
 export default function CuentaAhorroDetail({ open, onOpenChange, cuenta, titular, pucCuenta, acumuladoMes }) {
   if (!cuenta) return null;
@@ -47,6 +49,17 @@ export default function CuentaAhorroDetail({ open, onOpenChange, cuenta, titular
             Nota: {cuenta.nota}
           </div>
         )}
+        <div className="pt-3 border-t border-border flex items-center justify-between gap-3">
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+            Cerrar
+          </Button>
+          <Button asChild size="sm" className="gap-2" variant="default">
+            <Link to={`/admin/contabilidad/detalle-cuentas?cuenta=${cuenta.subcuenta_puc || "1110"}&cda_id=${cuenta.id}`}>
+              <FileSpreadsheet className="w-4 h-4 mr-1" />
+              Ver en Detalle de Cuentas ({cuenta.subcuenta_puc || "1110"})
+            </Link>
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

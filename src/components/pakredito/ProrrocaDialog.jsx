@@ -37,16 +37,24 @@ export default function ProrrocaDialog({ open, onOpenChange, prestamo, clienteNo
       if (pendientes.length === 0 && (cuotas || []).length > 0) {
         pendientes = [cuotas[cuotas.length - 1]];
       }
+
+      let proxima = nuevaFecha;
       if (pendientes.length > 0) {
+        // En préstamos con múltiples cuotas pendientes, cada cuota se desplaza proporcionalmente
+        // por los mismos días de prórroga para conservar estrictamente el orden y la separación del cronograma.
+        const basePrimera = pendientes[0].fecha_vencimiento || base;
+        proxima = addDays(basePrimera, dias);
+        const shiftDias = Math.round((new Date(proxima + "T00:00:00") - new Date(basePrimera + "T00:00:00")) / 86400000) || dias;
+
         await base44.entities.CuotaAmortizacion.bulkUpdate(
           pendientes.map((c) => ({
             id: c.id,
-            fecha_vencimiento: nuevaFecha,
+            fecha_vencimiento: addDays(c.fecha_vencimiento || base, shiftDias),
             estado: (Number(c.valor_pagado) || 0) > 0 ? "parcial" : "pendiente"
           }))
         );
       }
-      const proxima = nuevaFecha;
+
       const notaLinea = `Prórroga ${hoy}: +${dias} días → nuevo vence ${proxima}${nota ? ". " + nota : ""}`;
       await base44.entities.Prestamo.update(prestamo.id, {
         fecha_proximo_pago: proxima,

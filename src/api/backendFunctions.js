@@ -717,34 +717,29 @@ export async function reconciliarCuotasPrestamo(entities, prestamoId) {
 
   const proxCuota = cuotasReconciliadas.find((c) => c.estado !== "pagada") || cuotasReconciliadas[cuotasReconciliadas.length - 1];
 
-  // Extraer fecha prorrogada de las notas si existe (ej. "nuevo vencimiento 2026-10-27" o "nuevo vence 2026-10-27")
-  let fechaNotaProrroga = null;
-  if (p.notas) {
+  // En un plan de amortización ordenado, la fecha del próximo pago corresponde al vencimiento programado
+  // de la cuota pendiente (proxCuota). No se debe alterar la fecha_vencimiento de una cuota individual
+  // dentro del cronograma al abonar, pues desordena la secuencia de las cuotas siguientes.
+  let fechaProxFinal = proxCuota ? proxCuota.fecha_vencimiento : null;
+
+  // Solo para préstamos de 1 sola cuota donde se registró prórroga explícita en notas:
+  if (cuotasReconciliadas.length === 1 && p.notas) {
     const match = p.notas.match(/(?:nuevo vencimiento|nuevo vence)\s+([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
     if (match && match[1]) {
-      fechaNotaProrroga = match[1];
+      fechaProxFinal = match[1];
+      if (proxCuota && proxCuota.fecha_vencimiento !== fechaProxFinal) {
+        proxCuota.fecha_vencimiento = fechaProxFinal;
+        if (proxCuota.id) {
+          await entities.CuotaAmortizacion.update(proxCuota.id, { fecha_vencimiento: fechaProxFinal });
+        }
+      }
     }
   }
 
-  let fechaProxFinal = p.fecha_proximo_pago;
-  if (fechaNotaProrroga) {
-    fechaProxFinal = fechaNotaProrroga;
-  } else if (!fechaProxFinal && proxCuota?.fecha_vencimiento) {
-    fechaProxFinal = proxCuota.fecha_vencimiento;
-  }
-
-  // Si la fecha es nula o anterior al último abono registrado, proyectarla según el periodo del crédito
-  if (!fechaProxFinal || (p.fecha_ultimo_abono && fechaProxFinal < p.fecha_ultimo_abono)) {
-    const baseFecha = p.fecha_ultimo_abono || p.fecha_prestamo || hoy;
+  // Fallback si no tuviera fecha de vencimiento asignada
+  if (!fechaProxFinal) {
+    const baseFecha = p.fecha_prestamo || hoy;
     fechaProxFinal = sumarPeriodo(baseFecha, p.periodo || "mensual", 1);
-  }
-
-  // Sincronizar fecha de vencimiento en la cuota activa
-  if (proxCuota && fechaProxFinal && proxCuota.fecha_vencimiento !== fechaProxFinal) {
-    proxCuota.fecha_vencimiento = fechaProxFinal;
-    if (proxCuota.id) {
-      await entities.CuotaAmortizacion.update(proxCuota.id, { fecha_vencimiento: fechaProxFinal });
-    }
   }
 
   const nuevoEstado = (fechaProxFinal && fechaProxFinal < hoy) ? "en_mora" : "vigente";

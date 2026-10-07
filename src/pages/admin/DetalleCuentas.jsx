@@ -20,7 +20,9 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Layers, 
-  X
+  X,
+  Wallet,
+  ArrowLeft
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { formatCOP, formatDate, formatMonthYear } from "@/lib/contabilidad";
@@ -72,12 +74,14 @@ export default function DetalleCuentas() {
 
   // Estados de datos maestros
   const [cuentasPuc, setCuentasPuc] = useState([]);
+  const [cuentasAhorro, setCuentasAhorro] = useState([]);
   const [movimientos, setMovimientos] = useState([]);
   const [comprobantesMap, setComprobantesMap] = useState({});
   const [loading, setLoading] = useState(true);
 
   // Cuenta seleccionada
   const cuentaParam = searchParams.get("cuenta") || "1110";
+  const cdaIdParam = searchParams.get("cda_id") || searchParams.get("cuenta_ahorro_id");
   const [cuentaSel, setCuentaSel] = useState(cuentaParam);
   const [cuentaModalOpen, setCuentaModalOpen] = useState(false);
   const [filtroPucInput, setFiltroPucInput] = useState("");
@@ -110,7 +114,7 @@ export default function DetalleCuentas() {
     }
   }, [searchParams]);
 
-  // Cargar cuentas PUC, comprobantes y movimientos
+  // Cargar cuentas PUC, cuentas de ahorro, comprobantes y movimientos
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -118,11 +122,13 @@ export default function DetalleCuentas() {
     Promise.all([
       base44.entities.Cuenta.list("codigo", 1500).catch(() => []),
       base44.entities.ComprobanteContable.list("-fecha", 3000).catch(() => []),
-      base44.entities.MovimientoContable.list("fecha", 10000).catch(() => [])
+      base44.entities.MovimientoContable.list("fecha", 10000).catch(() => []),
+      base44.entities.CuentaAhorro.list().catch(() => [])
     ])
-      .then(([puc, comps, movs]) => {
+      .then(([puc, comps, movs, cdas]) => {
         if (!alive) return;
         setCuentasPuc(puc || []);
+        setCuentasAhorro(cdas || []);
 
         const cMap = {};
         const idsComprobantesValidos = new Set();
@@ -275,12 +281,27 @@ export default function DetalleCuentas() {
     toast.info("Filtros restablecidos");
   };
 
+  // Identificar si la cuenta consultada corresponde a una Cuenta de Ahorro (CDA)
+  const cdaActiva = useMemo(() => {
+    return cuentasAhorro.find((c) => 
+      (cdaIdParam && String(c.id) === String(cdaIdParam)) ||
+      (cuentaSel && String(c.subcuenta_puc || "").trim() === String(cuentaSel || "").trim())
+    );
+  }, [cuentasAhorro, cdaIdParam, cuentaSel]);
+
   // Movimientos de la cuenta seleccionada (todos los históricos para calcular saldo anterior)
   const movimientosCuentaCompleta = useMemo(() => {
     if (!cuentaSel) return [];
     const prefix = String(cuentaSel).trim();
-    return movimientos.filter((m) => String(m.subcuenta || "").startsWith(prefix));
-  }, [movimientos, cuentaSel]);
+    return movimientos.filter((m) => {
+      const matchSub = String(m.subcuenta || "").startsWith(prefix);
+      if (!matchSub) return false;
+      if (cdaIdParam && m.cuenta_ahorro_id) {
+        return String(m.cuenta_ahorro_id) === String(cdaIdParam);
+      }
+      return true;
+    });
+  }, [movimientos, cuentaSel, cdaIdParam]);
 
   // Filtrado y cálculo de Saldo Inicial / Anterior
   const { movimientosFiltrados, saldoInicial, metricas } = useMemo(() => {
@@ -523,6 +544,38 @@ export default function DetalleCuentas() {
           </Link>
         </div>
       </div>
+
+      {/* Banner informativo si se está consultando una Cuenta de Ahorro (CDA) */}
+      {cdaActiva && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-lg border border-primary/25 bg-primary/5 text-xs shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary shrink-0 border border-primary/20">
+              <Wallet className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="font-semibold text-sm text-foreground flex items-center flex-wrap gap-2">
+                <span>{cdaActiva.nombre}</span>
+                <Badge variant="outline" className="text-[10px] font-mono border-primary/40 text-primary bg-primary/10">
+                  CDA {cdaActiva.banco} · Subcuenta PUC {cdaActiva.subcuenta_puc}
+                </Badge>
+                <Badge variant={cdaActiva.estado === "activa" ? "default" : "secondary"} className="text-[10px]">
+                  {cdaActiva.estado === "activa" ? "Activa" : "Inactiva"}
+                </Badge>
+              </div>
+              <div className="text-muted-foreground mt-0.5">
+                N° de cuenta: <span className="font-mono text-foreground">{cdaActiva.numero_completo || "—"}</span> · Saldo actual en CDA: <b className="font-mono text-foreground">{formatCOP(cdaActiva.saldo)}</b>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-center">
+            <Button asChild size="sm" variant="outline" className="h-7 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/10">
+              <Link to="/admin/financieros/cuentas-ahorro">
+                <ArrowLeft className="w-3.5 h-3.5" /> Volver a Cuentas de Ahorro
+              </Link>
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Selector de Cuenta PUC y Accesos Rápidos */}
       <Card className="border bg-card shadow-sm">

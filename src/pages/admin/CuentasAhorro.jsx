@@ -3,7 +3,8 @@ import { base44 } from "@/api/base44Client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit, Ban, Trash2, Eye, AlertTriangle, Search } from "lucide-react";
+import { Plus, Edit, Ban, Trash2, Eye, AlertTriangle, Search, FileSpreadsheet, ExternalLink } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { formatCOP, BANCO_NAMES } from "@/lib/contabilidad";
 import CuentaAhorroForm from "@/components/admin/CuentaAhorroForm";
@@ -169,16 +170,21 @@ export default function CuentasAhorro() {
                       </div>
                     </div>
                     <div className="flex gap-1">
-                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setDetailCuenta(cda)}>
+                      <Button size="icon" variant="ghost" className="h-8 w-8 text-primary hover:bg-primary/10" asChild title="Ver movimientos en Detalle de Cuentas">
+                        <Link to={`/admin/contabilidad/detalle-cuentas?cuenta=${cda.subcuenta_puc || "1110"}&cda_id=${cda.id}`}>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </Link>
+                      </Button>
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setDetailCuenta(cda)} title="Ver detalles de la cuenta">
                         <Eye className="w-3.5 h-3.5" />
                       </Button>
-                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditing(cda); setFormOpen(true); }}>
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditing(cda); setFormOpen(true); }} title="Editar cuenta">
                         <Edit className="w-3.5 h-3.5" />
                       </Button>
-                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleToggleEstado(cda)}>
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleToggleEstado(cda)} title="Activar/Desactivar cuenta">
                         <Ban className="w-3.5 h-3.5" />
                       </Button>
-                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDelete(cda)}>
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDelete(cda)} title="Eliminar cuenta">
                         <Trash2 className="w-3.5 h-3.5 text-destructive" />
                       </Button>
                     </div>
@@ -225,6 +231,17 @@ export default function CuentasAhorro() {
                     )}
                   </div>
                   {cda.nota && <div className="mt-3 text-xs text-muted-foreground italic border-t border-border pt-2">{cda.nota}</div>}
+
+                  <div className="mt-3 pt-2.5 border-t border-border flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs text-muted-foreground flex items-center gap-1">
+                      <span className="text-[10px] uppercase font-semibold text-muted-foreground/80">PUC:</span> {cda.subcuenta_puc || "1110"}
+                    </span>
+                    <Button size="sm" variant="outline" className="h-7 text-xs text-primary border-primary/30 hover:bg-primary/5 hover:border-primary/50 gap-1.5" asChild>
+                      <Link to={`/admin/contabilidad/detalle-cuentas?cuenta=${cda.subcuenta_puc || "1110"}&cda_id=${cda.id}`}>
+                        <FileSpreadsheet className="w-3.5 h-3.5" /> Detalle de cuentas
+                      </Link>
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             );
