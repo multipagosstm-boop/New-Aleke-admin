@@ -346,6 +346,26 @@ const KNOWN_TABLE_COLUMNS = {
     'prestamo_id', 'numero', 'fecha_vencimiento', 'cuota', 'interes',
     'capital_abono', 'saldo_capital', 'estado', 'valor_pagado',
     'fecha_pago', 'abono_id'
+  ]),
+  emprendamos_cliente: new Set([
+    'id', 'created_date', 'updated_date', 'created_at', 'updated_at',
+    'nombre', 'documento', 'telefono', 'email', 'direccion',
+    'cupo_total', 'cupo_disponible', 'estado'
+  ]),
+  emprendamos_credito: new Set([
+    'id', 'created_date', 'updated_date', 'created_at', 'updated_at',
+    'cliente_id', 'codigo', 'monto_inicial', 'saldo_actual',
+    'tasa_interes', 'fecha_inicio', 'dia_pago', 'estado',
+    'observaciones', 'tipo', 'comprobante_id'
+  ]),
+  emprendamos_abono: new Set([
+    'id', 'created_date', 'updated_date', 'created_at', 'updated_at',
+    'credito_id', 'cliente_id', 'cuenta_id', 'monto',
+    'fecha', 'tipo_abono', 'comprobante_id', 'observaciones'
+  ]),
+  emprendamos_interes: new Set([
+    'id', 'created_date', 'updated_date', 'created_at', 'updated_at',
+    'credito_id', 'periodo', 'estado'
   ])
 };
 
@@ -433,6 +453,174 @@ export async function recordAuditLog({
   } catch (err) {
     console.warn('[AuditLog] Failed to record:', err);
   }
+}
+
+export function mapEntityRecord(table, d) {
+  if (!d || typeof d !== 'object') return d;
+  const mapped = {
+    ...d,
+    created_date: d.created_date || d.created_at,
+    updated_date: d.updated_date || d.updated_at
+  };
+
+  if (table === 'emprendamos_cliente') {
+    let meta = null;
+    if (d.direccion && typeof d.direccion === 'string' && d.direccion.startsWith('meta:')) {
+      try {
+        meta = JSON.parse(d.direccion.slice(5));
+      } catch {}
+    }
+
+    mapped.cliente_id = (meta && meta.cliente_id) || mapped.cliente_id || '';
+    mapped.nombre = (mapped.nombre && mapped.nombre !== 'Cliente Emprendamos' && mapped.nombre !== 'Cliente') 
+      ? mapped.nombre 
+      : ((meta && meta.nombre) || mapped.nombre || '');
+    mapped.documento = mapped.documento || (meta && meta.documento) || '';
+    mapped.telefono = mapped.telefono || (meta && meta.telefono) || '';
+    mapped.cupo_asignado = mapped.cupo_asignado !== undefined ? Number(mapped.cupo_asignado) : (meta && meta.cupo_asignado !== undefined ? Number(meta.cupo_asignado) : (mapped.cupo_total !== undefined ? Number(mapped.cupo_total) : 0));
+    mapped.saldo_deuda = mapped.saldo_deuda !== undefined ? Number(mapped.saldo_deuda) : (meta && meta.saldo_deuda !== undefined ? Number(meta.saldo_deuda) : (mapped.cupo_disponible !== undefined ? Number(mapped.cupo_disponible) : 0));
+    mapped.capital_inicial = mapped.capital_inicial !== undefined ? Number(mapped.capital_inicial) : (meta && meta.capital_inicial !== undefined ? Number(meta.capital_inicial) : (mapped.cupo_total !== undefined ? Number(mapped.cupo_total) : 0));
+    mapped.dia_pago = mapped.dia_pago !== undefined ? Number(mapped.dia_pago) : (meta && meta.dia_pago !== undefined ? Number(meta.dia_pago) : 15);
+    mapped.tasa_acordada = mapped.tasa_acordada !== undefined ? Number(mapped.tasa_acordada) : (meta && meta.tasa_acordada !== undefined ? Number(meta.tasa_acordada) : 0.03);
+    mapped.tasa_extracupo = mapped.tasa_extracupo !== undefined ? Number(mapped.tasa_extracupo) : (meta && meta.tasa_extracupo !== undefined ? Number(meta.tasa_extracupo) : 0.06);
+    mapped.fecha_ingreso = mapped.fecha_ingreso || (meta && meta.fecha_ingreso) || '';
+    mapped.fecha_eligible_salida = mapped.fecha_eligible_salida || (meta && meta.fecha_eligible_salida) || '';
+    mapped.plan_trazado = mapped.plan_trazado || (meta && meta.plan_trazado) || '';
+    mapped.contrato_url = mapped.contrato_url || (meta && meta.contrato_url) || '';
+    mapped.cda_apoderada_id = mapped.cda_apoderada_id || (meta && meta.cda_apoderada_id) || '';
+    mapped.comprobante_cartera_id = mapped.comprobante_cartera_id || (meta && meta.comprobante_cartera_id) || '';
+    mapped.extracupo_autorizado = mapped.extracupo_autorizado !== undefined ? mapped.extracupo_autorizado : (meta && meta.extracupo_autorizado !== undefined ? meta.extracupo_autorizado : 0);
+    mapped.notas = mapped.notas || (meta && meta.notas) || mapped.observaciones || '';
+    mapped.estado = mapped.estado || 'activo';
+  } else if (table === 'emprendamos_credito') {
+    mapped.capital = mapped.capital !== undefined ? Number(mapped.capital) : (mapped.monto_inicial !== undefined ? Number(mapped.monto_inicial) : 0);
+    mapped.saldo_capital = mapped.saldo_capital !== undefined ? Number(mapped.saldo_capital) : (mapped.saldo_actual !== undefined ? Number(mapped.saldo_actual) : (mapped.capital || 0));
+    mapped.tasa_nominal = mapped.tasa_nominal !== undefined ? Number(mapped.tasa_nominal) : (mapped.tasa_interes !== undefined ? Number(mapped.tasa_interes) : 0.03);
+    mapped.fecha = mapped.fecha || mapped.fecha_inicio || '';
+    mapped.concepto = mapped.concepto || mapped.observaciones || 'Crédito Emprendamos';
+    mapped.notas = mapped.notas || mapped.observaciones || '';
+    mapped.tipo = mapped.tipo || 'habitual';
+    mapped.dia_pago = mapped.dia_pago !== undefined ? Number(mapped.dia_pago) : 15;
+    mapped.saldo_intereses = mapped.saldo_intereses !== undefined ? Number(mapped.saldo_intereses) : 0;
+    mapped.cuota_fija = mapped.cuota_fija !== undefined ? Number(mapped.cuota_fija) : 0;
+    mapped.fecha_proximo_pago = mapped.fecha_proximo_pago || '';
+    mapped.estado = mapped.estado || 'vigente';
+    // Link to enrolled client ID (which is cliente_id in Supabase)
+    mapped.emprendamos_cliente_id = mapped.emprendamos_cliente_id || mapped.cliente_id || '';
+    mapped.cliente_id = mapped.cliente_id || mapped.emprendamos_cliente_id || '';
+    mapped.clienteNombre = mapped.clienteNombre || mapped.cliente_nombre || '';
+  } else if (table === 'emprendamos_abono') {
+    mapped.valor_total = mapped.valor_total !== undefined ? Number(mapped.valor_total) : (mapped.monto !== undefined ? Number(mapped.monto) : 0);
+    mapped.monto = mapped.monto !== undefined ? Number(mapped.monto) : (mapped.valor_total || 0);
+    mapped.emprendamos_cliente_id = mapped.emprendamos_cliente_id || mapped.cliente_id || '';
+    mapped.emprendamos_credito_id = mapped.emprendamos_credito_id || mapped.credito_id || '';
+    mapped.cda_id = mapped.cda_id || mapped.cuenta_id || '';
+    mapped.tipo = mapped.tipo || mapped.tipo_abono || 'capital';
+    mapped.notas = mapped.notas || mapped.observaciones || '';
+    mapped.detalles = mapped.detalles || [];
+  }
+
+  return mapped;
+}
+
+export function prepareEmprendamosPayload(table, payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  const p = { ...payload };
+
+  if (table === 'emprendamos_cliente') {
+    if (!p.documento && (p.cedula || p.numero_documento)) {
+      p.documento = String(p.cedula || p.numero_documento);
+    }
+    if (!p.nombre || p.nombre === 'Cliente' || p.nombre === 'Cliente Emprendamos') {
+      p.nombre = p.cliente_nombre || p.nombre_completo || p.tercero || (p.documento ? `Cliente Doc ${p.documento}` : (p.cliente_id ? `Cliente ${String(p.cliente_id).slice(-6)}` : (p.nombre || 'Cliente Emprendamos')));
+    }
+    if (p.cupo_total === undefined && p.cupo_asignado !== undefined) {
+      p.cupo_total = Number(p.cupo_asignado);
+    } else if (p.cupo_total === undefined && p.capital_inicial !== undefined) {
+      p.cupo_total = Number(p.capital_inicial);
+    }
+    if (p.cupo_disponible === undefined && p.saldo_deuda !== undefined) {
+      p.cupo_disponible = Number(p.saldo_deuda);
+    } else if (p.cupo_disponible === undefined && p.cupo_total !== undefined) {
+      p.cupo_disponible = Number(p.cupo_total);
+    }
+
+    // Preserve non-column metadata in direccion field
+    const meta = {
+      cliente_id: p.cliente_id || '',
+      nombre: p.nombre || '',
+      documento: p.documento || '',
+      telefono: p.telefono || '',
+      dia_pago: p.dia_pago !== undefined ? Number(p.dia_pago) : 15,
+      tasa_acordada: p.tasa_acordada !== undefined ? Number(p.tasa_acordada) : 0.03,
+      tasa_extracupo: p.tasa_extracupo !== undefined ? Number(p.tasa_extracupo) : 0.06,
+      capital_inicial: p.capital_inicial !== undefined ? Number(p.capital_inicial) : Number(p.cupo_total || 0),
+      saldo_deuda: p.saldo_deuda !== undefined ? Number(p.saldo_deuda) : Number(p.cupo_disponible || 0),
+      cupo_asignado: p.cupo_asignado !== undefined ? Number(p.cupo_asignado) : Number(p.cupo_total || 0),
+      fecha_ingreso: p.fecha_ingreso || '',
+      fecha_eligible_salida: p.fecha_eligible_salida || '',
+      plan_trazado: p.plan_trazado || '',
+      contrato_url: p.contrato_url || '',
+      cda_apoderada_id: p.cda_apoderada_id || '',
+      comprobante_cartera_id: p.comprobante_cartera_id || '',
+      extracupo_autorizado: p.extracupo_autorizado || 0,
+      notas: p.notas || p.observaciones || ''
+    };
+    p.direccion = `meta:${JSON.stringify(meta)}`;
+    p.estado = p.estado || 'activo';
+  } else if (table === 'emprendamos_credito') {
+    if (!p.codigo) {
+      p.codigo = `EMP-${Date.now().toString().slice(-6)}`;
+    }
+    if (p.monto_inicial === undefined && p.capital !== undefined) {
+      p.monto_inicial = Number(p.capital);
+    }
+    if (p.saldo_actual === undefined && p.saldo_capital !== undefined) {
+      p.saldo_actual = Number(p.saldo_capital);
+    }
+    if (p.tasa_interes === undefined && p.tasa_nominal !== undefined) {
+      p.tasa_interes = Number(p.tasa_nominal);
+    }
+    if (!p.fecha_inicio && p.fecha) {
+      p.fecha_inicio = p.fecha;
+    }
+    // In Supabase, cliente_id references emprendamos_cliente.id
+    if (p.emprendamos_cliente_id) {
+      p.cliente_id = p.emprendamos_cliente_id;
+    }
+    if (!p.observaciones && (p.notas || p.concepto)) {
+      p.observaciones = p.notas || p.concepto;
+    }
+    if (p.dia_pago !== undefined) {
+      p.dia_pago = Number(p.dia_pago);
+    }
+    p.estado = p.estado || 'vigente';
+    p.tipo = p.tipo || 'habitual';
+  } else if (table === 'emprendamos_abono') {
+    if (p.monto === undefined && p.valor_total !== undefined) {
+      p.monto = Number(p.valor_total);
+    }
+    if (p.valor_total === undefined && p.monto !== undefined) {
+      p.valor_total = Number(p.monto);
+    }
+    if (p.emprendamos_cliente_id) {
+      p.cliente_id = p.emprendamos_cliente_id;
+    }
+    if (p.emprendamos_credito_id) {
+      p.credito_id = p.emprendamos_credito_id;
+    }
+    if (!p.cuenta_id && p.cda_id) {
+      p.cuenta_id = p.cda_id;
+    }
+    if (!p.tipo_abono && p.tipo) {
+      p.tipo_abono = p.tipo;
+    }
+    if (!p.observaciones && p.notas) {
+      p.observaciones = p.notas;
+    }
+  }
+
+  return p;
 }
 
 // Generic entity repository builder
@@ -625,11 +813,7 @@ export function createEntityRepository(entityName) {
               console.warn(`Supabase list error for ${table}:`, error.message);
             }
           } else if (Array.isArray(data)) {
-            dbData = data.map(d => ({
-              ...d,
-              created_date: d.created_date || d.created_at,
-              updated_date: d.updated_date || d.updated_at
-            }));
+            dbData = data.map(d => mapEntityRecord(table, d));
           }
         } else {
           // Paginación por bloques para superar el límite de 1000 registros por query de PostgREST
@@ -673,18 +857,14 @@ export function createEntityRepository(entityName) {
               break;
             }
             if (!data || data.length === 0) break;
-            const mapped = data.map(d => ({
-              ...d,
-              created_date: d.created_date || d.created_at,
-              updated_date: d.updated_date || d.updated_at
-            }));
+            const mapped = data.map(d => mapEntityRecord(table, d));
             dbData.push(...mapped);
             if (data.length < PAGE_SIZE) break;
             from += data.length;
           }
         }
       }
-      const memItems = Array.from(getMemoryCollection(table).values());
+      const memItems = Array.from(getMemoryCollection(table).values()).map(d => mapEntityRecord(table, d));
       return deduplicateById([...dbData, ...memItems]);
     },
 
@@ -726,7 +906,7 @@ export function createEntityRepository(entityName) {
           let query = applyCriteria(client.from(table).select('*'), col);
           query = query.limit(targetLimit);
           let { data, error } = await query;
-          if (error && error.message?.includes('does not exist')) {
+          if (error && (error.message?.includes('does not exist') || error.code === '42703')) {
             const altCol = col === 'created_date' ? 'created_at' : null;
             const retryQ = applyCriteria(client.from(table).select('*'), altCol).limit(targetLimit);
             const retryRes = await retryQ;
@@ -747,11 +927,7 @@ export function createEntityRepository(entityName) {
               console.warn(`Supabase filter error for ${table}:`, error.message);
             }
           } else if (Array.isArray(data)) {
-            dbData = data.map(d => ({
-              ...d,
-              created_date: d.created_date || d.created_at,
-              updated_date: d.updated_date || d.updated_at
-            }));
+            dbData = data.map(d => mapEntityRecord(table, d));
           }
         } else {
           // Paginación por bloques para superar el límite de 1000 registros por query de PostgREST
@@ -763,13 +939,23 @@ export function createEntityRepository(entityName) {
             let query = applyCriteria(client.from(table).select('*'), actualCol);
             query = query.range(from, to);
             let { data, error } = await query;
-            if (error && error.message?.includes('does not exist')) {
+            if (error && (error.message?.includes('does not exist') || error.code === '42703')) {
               actualCol = actualCol === 'created_date' ? 'created_at' : null;
               const retry = applyCriteria(client.from(table).select('*'), actualCol).range(from, to);
               const retryRes = await retry;
               if (!retryRes.error && Array.isArray(retryRes.data)) {
                 data = retryRes.data;
                 error = null;
+              } else {
+                actualCol = null;
+                const fallback = applyCriteria(client.from(table).select('*'), null).range(from, to);
+                const fbRes = await fallback;
+                if (!fbRes.error && Array.isArray(fbRes.data)) {
+                  data = fbRes.data;
+                  error = null;
+                } else if (fbRes.error) {
+                  error = fbRes.error;
+                }
               }
             }
             if (error) {
@@ -779,11 +965,7 @@ export function createEntityRepository(entityName) {
               break;
             }
             if (!data || data.length === 0) break;
-            const mapped = data.map(d => ({
-              ...d,
-              created_date: d.created_date || d.created_at,
-              updated_date: d.updated_date || d.updated_at
-            }));
+            const mapped = data.map(d => mapEntityRecord(table, d));
             dbData.push(...mapped);
             if (data.length < PAGE_SIZE) break;
             from += data.length;
@@ -791,7 +973,7 @@ export function createEntityRepository(entityName) {
         }
 
         if (dbData.length > 0) {
-          return deduplicateById(dbData);
+          return deduplicateById(dbData.map(d => mapEntityRecord(table, d)));
         }
 
         // Fallback to memory filter if empty or error
@@ -810,7 +992,7 @@ export function createEntityRepository(entityName) {
             return String(item[k]) === String(v);
           });
         });
-        return deduplicateById(filtered);
+        return deduplicateById(filtered.map(d => mapEntityRecord(table, d)));
       }
 
       // Memory filter fallback
@@ -829,7 +1011,7 @@ export function createEntityRepository(entityName) {
           return String(item[k]) === String(v);
         });
       });
-      return deduplicateById(filtered);
+      return deduplicateById(filtered.map(d => mapEntityRecord(table, d)));
     },
 
     async get(id) {
@@ -839,11 +1021,15 @@ export function createEntityRepository(entityName) {
         const { data, error } = await client.from(table).select('*').eq('id', id).maybeSingle();
         if (error) {
           console.warn(`Supabase get error for ${table} (${id}):`, error.message);
-          return getMemoryCollection(table).get(id) || null;
+          const mem = getMemoryCollection(table).get(id);
+          return mem ? mapEntityRecord(table, mem) : null;
         }
-        return data || getMemoryCollection(table).get(id) || null;
+        if (data) return mapEntityRecord(table, data);
+        const mem = getMemoryCollection(table).get(id);
+        return mem ? mapEntityRecord(table, mem) : null;
       }
-      return getMemoryCollection(table).get(id) || null;
+      const mem = getMemoryCollection(table).get(id);
+      return mem ? mapEntityRecord(table, mem) : null;
     },
 
     async create(item) {
@@ -852,12 +1038,13 @@ export function createEntityRepository(entityName) {
 
       const id = item.id || `gen_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       const now = new Date().toISOString();
+      const preparedItem = prepareEmprendamosPayload(table, item);
       const rawPayload = {
-        ...item,
+        ...preparedItem,
         id,
-        created_date: item.created_date || now,
+        created_date: preparedItem.created_date || now,
         updated_date: now,
-        is_sample: item.is_sample ?? false
+        is_sample: preparedItem.is_sample ?? false
       };
 
       const dispatchMetadata = {};
@@ -874,7 +1061,7 @@ export function createEntityRepository(entityName) {
       if (client) {
         let attempts = 0;
         let lastError = null;
-        while (attempts < 5) {
+        while (attempts < 15) {
           attempts++;
           const { data, error } = await client.from(table).insert([payload]).select().single();
           if (!error && data) {
@@ -924,7 +1111,7 @@ export function createEntityRepository(entityName) {
         }
       });
 
-      return savedData;
+      return mapEntityRecord(table, savedData);
     },
 
     async update(id, updates) {
@@ -932,8 +1119,9 @@ export function createEntityRepository(entityName) {
       const extractedAction = explicitAction ? String(explicitAction) : 'update';
 
       const now = new Date().toISOString();
+      const preparedUpdates = prepareEmprendamosPayload(table, updates);
       const rawPayload = {
-        ...updates,
+        ...preparedUpdates,
         updated_date: now
       };
 
@@ -951,7 +1139,7 @@ export function createEntityRepository(entityName) {
       if (client) {
         let attempts = 0;
         let lastError = null;
-        while (attempts < 5) {
+        while (attempts < 15) {
           attempts++;
           const { data, error } = await client.from(table).update(payload).eq('id', id).select().single();
           if (!error && data) {
@@ -1004,7 +1192,7 @@ export function createEntityRepository(entityName) {
         }
       });
 
-      return updatedData;
+      return mapEntityRecord(table, updatedData);
     },
 
     async delete(id) {

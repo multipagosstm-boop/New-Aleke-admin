@@ -15,7 +15,14 @@ export default function AvisosPanel({
   onVerDetalle
 }) {
   const alertas = evaluarAlertasEmprendamos(inscritos, creditos, abonos, 3);
-  const clienteNombre = (cliId) => clientes.find((c) => c.id === cliId)?.nombre || "Cliente";
+  const clienteNombre = (cliId, ins) => {
+    const cli = clientes.find((c) => c.id === cliId);
+    if (cli?.nombre) return cli.nombre;
+    if (ins?.nombre && ins.nombre !== "Cliente Emprendamos" && ins.nombre !== "Cliente") return ins.nombre;
+    const insFound = inscritos.find((i) => i.cliente_id === cliId || i.id === cliId);
+    if (insFound?.nombre && insFound.nombre !== "Cliente Emprendamos" && insFound.nombre !== "Cliente") return insFound.nombre;
+    return ins?.nombre || "Cliente";
+  };
 
   return (
     <div className="space-y-4">
@@ -93,7 +100,7 @@ export default function AvisosPanel({
                   >
                     <div>
                       <span className="font-bold block text-foreground">
-                        {clienteNombre(item.cliente.cliente_id)}
+                        {clienteNombre(item.cliente.cliente_id, item.cliente)}
                       </span>
                       <span className="text-[11px] text-muted-foreground">
                         {item.credito.codigo} — Vence: {formatDate(item.fecha_vencimiento)} ({item.dias_restantes === 0 ? '¡Hoy!' : `en ${item.dias_restantes} día(s)`})
@@ -151,7 +158,7 @@ export default function AvisosPanel({
                   >
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold">{clienteNombre(item.cliente.cliente_id)}</span>
+                        <span className="font-bold">{clienteNombre(item.cliente.cliente_id, item.cliente)}</span>
                         <Badge variant="destructive" className="text-[10px]">
                           {item.dias_vencido} día(s) de atraso
                         </Badge>
@@ -200,7 +207,7 @@ export default function AvisosPanel({
                     className="p-2.5 bg-background border rounded-lg flex items-center justify-between text-xs"
                   >
                     <div>
-                      <span className="font-bold block">{clienteNombre(item.cliente.cliente_id)}</span>
+                      <span className="font-bold block">{clienteNombre(item.cliente.cliente_id, item.cliente)}</span>
                       <div className="flex gap-2 text-[11px] text-muted-foreground">
                         <span>Cupo Total: {formatCOP(item.cupo_asignado)}</span>
                         <span>Usado: {formatCOP(item.cupo_usado)}</span>
@@ -242,7 +249,7 @@ export default function AvisosPanel({
                     className="p-2.5 bg-emerald-500/5 border border-emerald-500/20 rounded-lg flex items-center justify-between text-xs"
                   >
                     <div>
-                      <span className="font-bold block">{clienteNombre(item.cliente.cliente_id)}</span>
+                      <span className="font-bold block">{clienteNombre(item.cliente.cliente_id, item.cliente)}</span>
                       <span className="text-[11px] text-muted-foreground">
                         Ingresó: {formatDate(item.fecha_ingreso)} | Cumplió 1 año el {formatDate(item.fecha_eligible)}
                       </span>

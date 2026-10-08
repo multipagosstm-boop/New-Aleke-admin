@@ -76,8 +76,8 @@ export default function EstadoCuentaDialog({
             <div className="p-3 bg-muted/30 border rounded-lg grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
                 <span className="text-muted-foreground block text-[11px]">Cliente:</span>
-                <span className="font-bold text-sm block">{cliente?.nombre || 'Cliente'}</span>
-                <span className="text-muted-foreground text-[10px]">Doc: {cliente?.documento || '—'}</span>
+                <span className="font-bold text-sm block">{cliente?.nombre || inscrito?.nombre || 'Cliente'}</span>
+                <span className="text-muted-foreground text-[10px]">Doc: {cliente?.documento || cliente?.cedula || inscrito?.documento || '—'}</span>
               </div>
               <div>
                 <span className="text-muted-foreground block text-[11px]">Día de Cobro:</span>

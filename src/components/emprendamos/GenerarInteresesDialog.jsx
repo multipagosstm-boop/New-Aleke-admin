@@ -53,7 +53,7 @@ export default function GenerarInteresesDialog({
 
       totalInteresesEstimados += Math.round(interes);
       previsualizacion.push({
-        clienteNombre: cli?.nombre || "Cliente",
+        clienteNombre: cli?.nombre || (ins.nombre && ins.nombre !== "Cliente Emprendamos" ? ins.nombre : "") || c.clienteNombre || "Cliente",
         codigo: c.codigo,
         tipo: c.tipo,
         concepto: c.concepto,

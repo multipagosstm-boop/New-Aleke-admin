@@ -133,9 +133,72 @@ export default function Emprendamos() {
     }
   };
 
-  // Helper para resolver nombre de cliente
-  const getCliente = (clienteId) => clientes.find((c) => c.id === clienteId);
-  const clienteNombre = (clienteId) => getCliente(clienteId)?.nombre || "—";
+  // Helper inteligente para resolver cliente tanto desde Cliente (base44) como desde EmprendamosCliente (inscritos)
+  const getCliente = useCallback((clienteId) => {
+    if (!clienteId) return null;
+    return clientes.find((c) => c.id === clienteId) || null;
+  }, [clientes]);
+
+  const resolveClienteInfo = useCallback((idOrCliId, fallbackNombre) => {
+    if (!idOrCliId && !fallbackNombre) {
+      return { nombre: "—", documento: "—", telefono: "—", cliente: null, inscrito: null };
+    }
+    // 1. Buscar directamente en clientes por id
+    const directCli = clientes.find((c) => c.id === idOrCliId);
+    if (directCli) {
+      const ins = inscritos.find((i) => i.cliente_id === directCli.id || i.id === directCli.id);
+      return {
+        nombre: directCli.nombre,
+        documento: directCli.cedula || directCli.documento || ins?.documento || "—",
+        telefono: directCli.telefono || ins?.telefono || "—",
+        cliente: directCli,
+        inscrito: ins || null
+      };
+    }
+
+    // 2. Buscar en inscritos (EmprendamosCliente) por id o por cliente_id
+    const ins = inscritos.find((i) => i.id === idOrCliId || i.cliente_id === idOrCliId);
+    if (ins) {
+      const linkedCli = ins.cliente_id ? clientes.find((c) => c.id === ins.cliente_id) : null;
+      const validInsNom = ins.nombre && ins.nombre !== "Cliente Emprendamos" && ins.nombre !== "Cliente" ? ins.nombre : null;
+      const finalNom = linkedCli?.nombre || validInsNom || fallbackNombre || ins.nombre || "Cliente";
+      const finalDoc = linkedCli?.cedula || linkedCli?.documento || ins.documento || "—";
+      const finalTel = linkedCli?.telefono || ins.telefono || "—";
+      return {
+        nombre: finalNom,
+        documento: finalDoc,
+        telefono: finalTel,
+        cliente: linkedCli || null,
+        inscrito: ins
+      };
+    }
+
+    // 3. Si se pasó un nombre de fallback, intentar buscar por nombre en clientes
+    if (fallbackNombre) {
+      const byNomCli = clientes.find((c) => c.nombre && c.nombre.toLowerCase() === String(fallbackNombre).toLowerCase());
+      if (byNomCli) {
+        return {
+          nombre: byNomCli.nombre,
+          documento: byNomCli.cedula || byNomCli.documento || "—",
+          telefono: byNomCli.telefono || "—",
+          cliente: byNomCli,
+          inscrito: null
+        };
+      }
+    }
+
+    return {
+      nombre: fallbackNombre || (idOrCliId ? (String(idOrCliId).startsWith("gen_") || String(idOrCliId).startsWith("emp_") ? "Cliente" : idOrCliId) : "—"),
+      documento: "—",
+      telefono: "—",
+      cliente: null,
+      inscrito: null
+    };
+  }, [clientes, inscritos]);
+
+  const clienteNombre = useCallback((clienteId, fallbackNombre) => {
+    return resolveClienteInfo(clienteId, fallbackNombre).nombre;
+  }, [resolveClienteInfo]);
 
   // Métricas financieras globales
   const metricas = useMemo(() => {
@@ -175,9 +238,9 @@ export default function Emprendamos() {
   // Lista de clientes filtrada
   const clientesFiltrados = useMemo(() => {
     return inscritos.filter((ins) => {
-      const cli = getCliente(ins.cliente_id);
-      const nombre = (cli?.nombre || "").toLowerCase();
-      const doc = (cli?.documento || "").toLowerCase();
+      const info = resolveClienteInfo(ins.cliente_id || ins.id, ins.nombre);
+      const nombre = (info.nombre || "").toLowerCase();
+      const doc = (info.documento || "").toLowerCase();
       const q = busquedaClientes.toLowerCase();
 
       const coincideBusqueda = !q || nombre.includes(q) || doc.includes(q);
@@ -190,13 +253,13 @@ export default function Emprendamos() {
 
       return coincideBusqueda && coincideEstado;
     });
-  }, [inscritos, clientes, busquedaClientes, filtroEstadoCliente]);
+  }, [inscritos, resolveClienteInfo, busquedaClientes, filtroEstadoCliente]);
 
   // Lista de créditos filtrada
   const creditosFiltrados = useMemo(() => {
     return creditos.filter((c) => {
-      const cli = getCliente(c.cliente_id);
-      const nombre = (cli?.nombre || "").toLowerCase();
+      const cliNom = clienteNombre(c.emprendamos_cliente_id || c.cliente_id, c.clienteNombre);
+      const nombre = (cliNom || "").toLowerCase();
       const cod = (c.codigo || "").toLowerCase();
       const conc = (c.concepto || "").toLowerCase();
       const q = busquedaCreditos.toLowerCase();
@@ -211,7 +274,7 @@ export default function Emprendamos() {
 
       return coincideBusqueda && coincideTipo;
     });
-  }, [creditos, clientes, busquedaCreditos, filtroTipoCredito]);
+  }, [creditos, clienteNombre, busquedaCreditos, filtroTipoCredito]);
 
   // Handlers para abrir modales desde filas
   const handleAbrirFicha = (inscritoId) => {
@@ -509,8 +572,8 @@ export default function Emprendamos() {
                   </tr>
                 ) : (
                   clientesFiltrados.map((ins) => {
-                    const cli = getCliente(ins.cliente_id);
-                    const credsCli = creditos.filter((c) => c.emprendamos_cliente_id === ins.id && c.estado === "vigente");
+                    const info = resolveClienteInfo(ins.cliente_id || ins.id, ins.nombre);
+                    const credsCli = creditos.filter((c) => (c.emprendamos_cliente_id === ins.id || c.cliente_id === ins.id) && c.estado === "vigente");
                     const cupoDisp = calcularCupoDisponible(ins.cupo_asignado, credsCli);
                     const hoyDate = hoyLocal();
                     const esEligible = ins.fecha_eligible_salida && ins.fecha_eligible_salida <= hoyDate;
@@ -523,10 +586,10 @@ export default function Emprendamos() {
                             onClick={() => handleAbrirFicha(ins.id)}
                             className="font-bold text-foreground hover:text-primary text-left block"
                           >
-                            {cli?.nombre || "Cliente"}
+                            {info.nombre}
                           </button>
                           <span className="text-[10px] text-muted-foreground block">
-                            Doc: {cli?.documento || "—"} | Ingreso: {formatDate(ins.fecha_ingreso)}
+                            Doc: {info.documento} | Ingreso: {formatDate(ins.fecha_ingreso)}
                           </span>
                         </td>
                         <td className="p-3">
@@ -700,7 +763,7 @@ export default function Emprendamos() {
                   creditosFiltrados.map((c) => (
                     <tr key={c.id} className="hover:bg-muted/30">
                       <td className="p-3 font-bold text-foreground">{c.codigo}</td>
-                      <td className="p-3 font-medium">{clienteNombre(c.cliente_id)}</td>
+                      <td className="p-3 font-medium">{clienteNombre(c.emprendamos_cliente_id || c.cliente_id, c.clienteNombre)}</td>
                       <td className="p-3">
                         <Badge
                           variant={
@@ -802,7 +865,7 @@ export default function Emprendamos() {
                     return (
                       <tr key={a.id} className="hover:bg-muted/30">
                         <td className="p-3 font-medium">{formatDate(a.fecha)}</td>
-                        <td className="p-3 font-semibold">{clienteNombre(a.cliente_id)}</td>
+                        <td className="p-3 font-semibold">{clienteNombre(a.emprendamos_cliente_id || a.cliente_id)}</td>
                         <td className="p-3">
                           <Badge variant="outline" className="text-[10px]">{a.tipo}</Badge>
                         </td>
@@ -886,7 +949,7 @@ export default function Emprendamos() {
                       <tr key={it.id} className="hover:bg-muted/30">
                         <td className="p-3 font-bold">{it.periodo}</td>
                         <td className="p-3 text-muted-foreground">{formatDate(it.fecha)}</td>
-                        <td className="p-3 font-medium">{clienteNombre(it.cliente_id)}</td>
+                        <td className="p-3 font-medium">{clienteNombre(it.emprendamos_cliente_id || it.cliente_id)}</td>
                         <td className="p-3 font-semibold">{cr?.codigo || "Crédito"}</td>
                         <td className="p-3 text-right">{formatCOP(it.capital_base)}</td>
                         <td className="p-3 text-center">{formatearTasaPorcentaje(it.tasa)}</td>
@@ -998,7 +1061,7 @@ export default function Emprendamos() {
         open={openEstadoCuenta}
         onOpenChange={setOpenEstadoCuenta}
         inscrito={selectedInscrito}
-        cliente={getCliente(selectedInscrito?.cliente_id)}
+        cliente={resolveClienteInfo(selectedInscrito?.cliente_id || selectedInscrito?.id, selectedInscrito?.nombre).cliente || { id: selectedInscrito?.id, nombre: selectedInscrito?.nombre, documento: selectedInscrito?.documento }}
       />
 
       <AmortizacionDialog
@@ -1007,14 +1070,14 @@ export default function Emprendamos() {
         credito={selectedCredito}
         abonos={abonos}
         intereses={intereses}
-        clienteNombre={clienteNombre(selectedCredito?.cliente_id)}
+        clienteNombre={clienteNombre(selectedCredito?.emprendamos_cliente_id || selectedCredito?.cliente_id, selectedCredito?.clienteNombre)}
       />
 
       <SalidaClienteDialog
         open={openSalida}
         onOpenChange={setOpenSalida}
         inscrito={selectedInscrito}
-        cliente={getCliente(selectedInscrito?.cliente_id)}
+        cliente={resolveClienteInfo(selectedInscrito?.cliente_id || selectedInscrito?.id, selectedInscrito?.nombre).cliente || { id: selectedInscrito?.id, nombre: selectedInscrito?.nombre, documento: selectedInscrito?.documento }}
         onSuccess={handleSuccessAction}
       />
 
@@ -1022,7 +1085,7 @@ export default function Emprendamos() {
         open={openFichaDetail}
         onOpenChange={setOpenFichaDetail}
         inscrito={selectedInscrito}
-        cliente={getCliente(selectedInscrito?.cliente_id)}
+        cliente={resolveClienteInfo(selectedInscrito?.cliente_id || selectedInscrito?.id, selectedInscrito?.nombre).cliente || { id: selectedInscrito?.id, nombre: selectedInscrito?.nombre, documento: selectedInscrito?.documento, telefono: selectedInscrito?.telefono }}
         creditos={creditos}
         abonos={abonos}
         intereses={intereses}

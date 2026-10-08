@@ -3,12 +3,13 @@ import { base44 } from "@/api/base44Client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit, Ban, Trash2, Eye, AlertTriangle, Search, FileSpreadsheet, ExternalLink } from "lucide-react";
+import { Plus, Edit, Ban, Trash2, Eye, AlertTriangle, Search, FileSpreadsheet, ExternalLink, GitCompare } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { formatCOP, BANCO_NAMES } from "@/lib/contabilidad";
 import CuentaAhorroForm from "@/components/admin/CuentaAhorroForm";
 import CuentaAhorroDetail from "@/components/admin/CuentaAhorroDetail";
+import ConciliarCdaDialog from "@/components/admin/ConciliarCdaDialog";
 
 export default function CuentasAhorro() {
   const [cuentas, setCuentas] = useState([]);
@@ -21,6 +22,8 @@ export default function CuentasAhorro() {
   const [detailCuenta, setDetailCuenta] = useState(null);
   const [busqueda, setBusqueda] = useState("");
   const [acumuladoPorSubcuenta, setAcumuladoPorSubcuenta] = useState({});
+  const [conciliarOpen, setConciliarOpen] = useState(false);
+  const [movimientosContables, setMovimientosContables] = useState([]);
 
   const loadData = useCallback(async () => {
     try {
@@ -45,6 +48,9 @@ export default function CuentasAhorro() {
         if (!cred) continue;
         acum[m.subcuenta] = (acum[m.subcuenta] || 0) + cred;
       }
+      // Obtener todos los movimientos activos para la conciliación de CDA
+      const todosMovs = await base44.entities.MovimientoContable.filter({ estado: "activo" }, "-fecha", 10000).catch(() => movs);
+      setMovimientosContables(todosMovs || movs || []);
       setCuentas(cdas);
       setClientes(clients);
       setConfig(configs[0] || null);
@@ -111,9 +117,19 @@ export default function CuentasAhorro() {
           <div className="text-sm text-muted-foreground whitespace-nowrap">
             {cuentasFiltradas.length} de {cuentas.length} cuenta(s) · {cuentas.filter((c) => c.estado === "activa").length} activa(s)
           </div>
-          <Button onClick={() => { setEditing(null); setFormOpen(true); }}>
-            <Plus className="w-4 h-4 mr-2" /> Nueva Cuenta
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="gap-2 border-primary/40 text-primary hover:bg-primary/10"
+              onClick={() => setConciliarOpen(true)}
+            >
+              <GitCompare className="w-4 h-4" />
+              Conciliar CDA (CSV)
+            </Button>
+            <Button onClick={() => { setEditing(null); setFormOpen(true); }}>
+              <Plus className="w-4 h-4 mr-2" /> Nueva Cuenta
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -265,6 +281,13 @@ export default function CuentasAhorro() {
         titular={detailCuenta ? clienteMap[detailCuenta.titular_id] : null}
         pucCuenta={detailCuenta ? pucMap[detailCuenta.subcuenta_puc] : null}
         acumuladoMes={detailCuenta ? (Number(acumuladoPorSubcuenta[String(detailCuenta.subcuenta_puc)] || 0)) : 0}
+      />
+
+      <ConciliarCdaDialog
+        open={conciliarOpen}
+        onOpenChange={setConciliarOpen}
+        cuentas={cuentas}
+        movimientos={movimientosContables}
       />
     </div>
   );

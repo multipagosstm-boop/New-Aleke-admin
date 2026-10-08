@@ -178,3 +178,53 @@ VALUES
   ('6ab482c7f2a9a042667d1e2e', 12097597, '2026-09-11', 'total', NULL, NULL, '130509', '[{"valor_aplicado":12097597,"capital":12097597,"credito_id":"6ab4512dcd0202cf44e6aeaf","intereses":0}]'::jsonb, '6ab482c7ca8d446dd9b342d1', '6a98f274b437ec02a10288fd', NULL, '6ab4512cb6c296969672f8ea', '2026-09-24T01:54:15.812Z', '2026-09-24T01:54:15.812Z'),
   ('6ab4824c94ae2e9313a7d9b2', 600000, '2026-09-01', 'otro', '6a9904f8d5342ec4d0a6662f', NULL, '11100104', '[{"valor_aplicado":600000,"capital":600000,"credito_id":"6ab4512dcd0202cf44e6aeaf","intereses":0}]'::jsonb, '6ab4824b40437c1cb7530b6e', '6a98f274b437ec02a10288fd', NULL, '6ab4512cb6c296969672f8ea', '2026-09-24T01:52:12.293Z', '2026-09-24T01:52:12.293Z')
 ON CONFLICT (id) DO UPDATE SET updated_date = EXCLUDED.updated_date;
+
+-- ====================================================================
+-- COMPATIBILIDAD DE COLUMNAS (Asegurar created_date y created_at)
+-- ====================================================================
+DO $$
+BEGIN
+  -- emprendamos_cliente
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_cliente' AND column_name='created_date') THEN
+    ALTER TABLE public."emprendamos_cliente" ADD COLUMN "created_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_cliente' AND column_name='created_at') THEN
+    ALTER TABLE public."emprendamos_cliente" ADD COLUMN "created_at" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_cliente' AND column_name='updated_date') THEN
+    ALTER TABLE public."emprendamos_cliente" ADD COLUMN "updated_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+
+  -- emprendamos_credito
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_credito' AND column_name='created_date') THEN
+    ALTER TABLE public."emprendamos_credito" ADD COLUMN "created_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_credito' AND column_name='created_at') THEN
+    ALTER TABLE public."emprendamos_credito" ADD COLUMN "created_at" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_credito' AND column_name='updated_date') THEN
+    ALTER TABLE public."emprendamos_credito" ADD COLUMN "updated_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+
+  -- emprendamos_abono
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_abono' AND column_name='created_date') THEN
+    ALTER TABLE public."emprendamos_abono" ADD COLUMN "created_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_abono' AND column_name='created_at') THEN
+    ALTER TABLE public."emprendamos_abono" ADD COLUMN "created_at" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_abono' AND column_name='updated_date') THEN
+    ALTER TABLE public."emprendamos_abono" ADD COLUMN "updated_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+
+  -- emprendamos_interes
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_interes' AND column_name='created_date') THEN
+    ALTER TABLE public."emprendamos_interes" ADD COLUMN "created_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_interes' AND column_name='created_at') THEN
+    ALTER TABLE public."emprendamos_interes" ADD COLUMN "created_at" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='emprendamos_interes' AND column_name='updated_date') THEN
+    ALTER TABLE public."emprendamos_interes" ADD COLUMN "updated_date" TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+  END IF;
+END $$;

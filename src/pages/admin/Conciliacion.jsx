@@ -16,6 +16,7 @@ import DiferenciasPanel from "@/components/conciliacion/DiferenciasPanel";
 import PdfUploadDialog from "@/components/conciliacion/PdfUploadDialog";
 import EditarLineaBancoDialog from "@/components/conciliacion/EditarLineaBancoDialog";
 import ModificarSobranteDialog from "@/components/conciliacion/ModificarSobranteDialog";
+import ConciliarCdaDialog from "@/components/admin/ConciliarCdaDialog";
 import { useToast } from "@/components/ui/use-toast";
 
 const ESTADO_CONC_BADGE = {
@@ -52,6 +53,8 @@ export default function Conciliacion() {
   const [periodoFiltro, setPeriodoFiltro] = useState("todos");
   const [busquedaTdc, setBusquedaTdc] = useState("");
   const [vistaTab, setVistaTab] = useState("control");
+  const [conciliarCdaModal, setConciliarCdaModal] = useState(false);
+  const [movimientosParaCda, setMovimientosParaCda] = useState([]);
 
   const normalize = (s) => (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const [ajustePesoDialog, setAjustePesoDialog] = useState(false);
@@ -72,13 +75,15 @@ export default function Conciliacion() {
 
   const loadData = async () => {
     try {
-      const [exts, prods, cdaList, cliList] = await Promise.all([
+      const [exts, prods, cdaList, cliList, movList] = await Promise.all([
         base44.entities.ExtractoProducto.list("-fecha_pago"),
         base44.entities.ProductoCredito.list(),
         base44.entities.CuentaAhorro.list(),
-        base44.entities.Cliente.list()
+        base44.entities.Cliente.list(),
+        base44.entities.MovimientoContable.filter({ estado: "activo" }, "-fecha", 10000).catch(() => [])
       ]);
       setExtractos(exts); setProductos(prods); setCdas(cdaList); setClientes(cliList);
+      setMovimientosParaCda(movList || []);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
@@ -482,6 +487,14 @@ export default function Conciliacion() {
                 {periodos.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
               </SelectContent>
             </Select>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-primary/40 text-primary hover:bg-primary/10 gap-1.5"
+              onClick={() => setConciliarCdaModal(true)}
+            >
+              <FileSpreadsheet className="w-4 h-4" /> Conciliar CDA (CSV)
+            </Button>
             <Button size="sm" onClick={() => setPdfModal(true)}>
               <FileUp className="w-4 h-4 mr-1" /> Cargar extracto PDF
             </Button>
@@ -1128,6 +1141,13 @@ export default function Conciliacion() {
           await handleModificarSobrante(data);
           setModificarSistemaModal({ open: false, movimiento: null });
         }}
+      />
+
+      <ConciliarCdaDialog
+        open={conciliarCdaModal}
+        onOpenChange={setConciliarCdaModal}
+        cuentas={cdas}
+        movimientos={movimientosParaCda}
       />
 
     </div>

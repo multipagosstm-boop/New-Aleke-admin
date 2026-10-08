@@ -109,7 +109,7 @@ export default function ClienteEmprendamosDetail({
             <div>
               <div className="flex items-center gap-2">
                 <DialogTitle className="text-xl font-bold">
-                  {cliente?.nombre || "Ficha del Cliente"}
+                  {cliente?.nombre || inscrito?.nombre || "Ficha del Cliente"}
                 </DialogTitle>
                 <Badge variant={inscrito.estado === "activo" ? "default" : "outline"}>
                   {inscrito.estado === "activo" ? "Activo en Emprendamos" : inscrito.estado}
@@ -121,7 +121,7 @@ export default function ClienteEmprendamosDetail({
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Doc: {cliente?.documento || "—"} | Tel: {cliente?.telefono || "—"} | Ingreso: {formatDate(inscrito.fecha_ingreso)} | Día de Pago: Día {inscrito.dia_pago}
+                Doc: {cliente?.documento || cliente?.cedula || inscrito?.documento || "—"} | Tel: {cliente?.telefono || inscrito?.telefono || "—"} | Ingreso: {formatDate(inscrito.fecha_ingreso)} | Día de Pago: Día {inscrito.dia_pago}
               </p>
             </div>
 

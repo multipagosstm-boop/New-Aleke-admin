@@ -9,7 +9,7 @@ import {
   esCuotaPosterior,
   restarUnDia,
   extraerDatosExtractoConIA
-} from "../lib/extractoUtils";
+} from "../lib/extractoUtils.js";
 import {
   generarAmortizacionCuotaFija,
   generarAmortizacionMesVencido,
@@ -17,9 +17,9 @@ import {
   sumarPeriodo,
   calcularSaldoTotalDeber,
   reconciliarCuotasConAbonos
-} from "../lib/pakredito";
-import { calcularNextCodigo, getClaseNombre } from "../lib/cuentasPuc";
-import { formatCOP } from "../lib/contabilidad";
+} from "../lib/pakredito.js";
+import { calcularNextCodigo, getClaseNombre } from "../lib/cuentasPuc.js";
+import { formatCOP } from "../lib/contabilidad.js";
 
 export async function calcularTotales(entities, payload = {}) {
   const { periodo = null } = payload || {};
@@ -4808,6 +4808,8 @@ export async function gestionarEmprendamos(entities, payload = {}) {
     const fechaSalidaEligible = sumarMesesISO(fecha_ingreso, 12);
     const inscrito = await entities.EmprendamosCliente.create({
       cliente_id,
+      nombre: cliente?.nombre || `Cliente ${String(cliente_id).slice(-6)}`,
+      documento: cliente?.cedula || cliente?.documento || "",
       fecha_ingreso,
       dia_pago: dp,
       tasa_acordada: tasa,
@@ -4838,7 +4840,7 @@ export async function gestionarEmprendamos(entities, payload = {}) {
     const codigoCredito = await generarCodigoCreditoEmprendamos(entities);
     const credito = await entities.EmprendamosCredito.create({
       emprendamos_cliente_id: inscrito.id,
-      cliente_id,
+      cliente_id: inscrito.id,
       codigo: codigoCredito,
       tipo: "cartera_inicial",
       concepto: `Cartera inicial asumida — ${productos?.length ? productos.length + " partidas" : "1 partida"}`,
@@ -4973,7 +4975,7 @@ export async function gestionarEmprendamos(entities, payload = {}) {
     const codigo = await generarCodigoCreditoEmprendamos(entities);
     const credito = await entities.EmprendamosCredito.create({
       emprendamos_cliente_id,
-      cliente_id: inscrito.cliente_id,
+      cliente_id: emprendamos_cliente_id,
       codigo,
       tipo,
       concepto: concepto || `Crédito ${tipo}`,
@@ -5092,7 +5094,7 @@ export async function gestionarEmprendamos(entities, payload = {}) {
         const codigo = await generarCodigoCreditoEmprendamos(entities);
         credito = await entities.EmprendamosCredito.create({
           emprendamos_cliente_id,
-          cliente_id: inscrito.cliente_id,
+          cliente_id: emprendamos_cliente_id,
           codigo,
           tipo: "habitual",
           concepto: `Comisión ${tdcProducto?.nombre || "nuevo producto"} (${(pct * 100).toFixed(0)}%)`,
@@ -5729,6 +5731,7 @@ export async function gestionarEmprendamos(entities, payload = {}) {
   }
 
   // 14. MONTAR CRÉDITOS INICIALES (CSV / Lote con asiento contable al 31 de agosto)
+  // 14. MONTAR CRÉDITOS INICIALES (CSV / Lote con asiento contable al 31 de agosto)
   if (accion === "montarCreditosIniciales") {
     const { creditos = [], reemplazarExistentes = true, fecha_corte = "2026-08-31" } = payload;
     if (!Array.isArray(creditos) || creditos.length === 0) {
@@ -5742,22 +5745,143 @@ export async function gestionarEmprendamos(entities, payload = {}) {
       }
     }
 
+    // Cargar clientes existentes y vinculados a Emprendamos para emparejar o auto-crear
+    const allClientes = await entities.Cliente.list("-created_date", 2000).catch(() => []);
+    const allEmprendamosClientes = await entities.EmprendamosCliente.list("-created_date", 2000).catch(() => []);
+
+    const norm = (str) => String(str || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, " ");
+
     const granTotal = creditos.reduce((s, c) => s + (Number(c.capital) || 0), 0);
     const movsAsiento = [];
 
-    // Por cada crédito, un débito a 120502 (Cartera Emprendamos)
+    // Resolver cada crédito asegurando que tenga Cliente y EmprendamosCliente
+    const creditosResueltos = [];
+
     for (const c of creditos) {
       const monto = Number(c.capital) || 0;
       if (monto <= 0) continue;
-      const cli = c.cliente_id ? await entities.Cliente.get(c.cliente_id).catch(() => null) : null;
-      const nom = cli?.nombre || c.clienteNombre || "Cliente";
+      const dp = Number(c.dia_pago || c.diaPago) || 15;
+      const tasa = Number(c.tasa) || 0.03;
+      const rawDoc = String(c.documento || c.cedula || "").replace(/[^0-9a-zA-Z]/g, "").trim();
+      let rawNom = String(c.clienteNombre || c.clienteText || "Cliente").trim();
+      let doc = rawDoc;
+      if (!doc && /^\d{6,12}$/.test(rawNom)) {
+        doc = rawNom;
+        rawNom = "";
+      }
+      const normNom = norm(rawNom);
+
+      // 1. Buscar o crear Cliente
+      let cli = c.cliente_id ? allClientes.find(cl => cl.id === c.cliente_id) : null;
+      if (!cli && doc) {
+        cli = allClientes.find(cl => {
+          const cDoc = String(cl.cedula || cl.documento || cl.numero_documento || "").replace(/[^0-9a-zA-Z]/g, "").trim();
+          return cDoc && cDoc === doc;
+        });
+      }
+      if (!cli && normNom && normNom !== "cliente") {
+        cli = allClientes.find(cl => norm(cl.nombre) === normNom || norm(cl.nombre).includes(normNom) || normNom.includes(norm(cl.nombre)));
+      }
+      if (!cli && rawNom && rawNom.toLowerCase() !== "cliente" && !/^\d+$/.test(rawNom)) {
+        try {
+          cli = await entities.Cliente.create({
+            nombre: rawNom,
+            cedula: doc || "",
+            documento: doc || "",
+            tipo: "persona",
+            estado: "activo",
+            lineas_negocio: ["emprendamos"],
+            is_sample: false
+          });
+          if (cli) allClientes.push(cli);
+        } catch (eCli) {
+          console.warn("No se pudo auto-crear Cliente:", eCli);
+        }
+      }
+
+      const clienteId = cli?.id || c.cliente_id || "";
+      const nomFinal = cli?.nombre || (rawNom && !/^\d+$/.test(rawNom) ? rawNom : (doc ? `Cliente Doc ${doc}` : "Cliente"));
+      const docFinal = cli?.cedula || cli?.documento || doc || "";
+      const telFinal = cli?.telefono || "";
+
+      // 2. Buscar o crear EmprendamosCliente
+      let empCli = null;
+      if (clienteId) {
+        empCli = allEmprendamosClientes.find(e => e.cliente_id === clienteId || e.id === clienteId);
+      }
+      if (!empCli && docFinal) {
+        empCli = allEmprendamosClientes.find(e => {
+          const eDoc = String(e.documento || e.cedula || "").replace(/[^0-9a-zA-Z]/g, "").trim();
+          return eDoc && eDoc === docFinal;
+        });
+      }
+      if (!empCli && normNom && normNom !== "cliente") {
+        empCli = allEmprendamosClientes.find(e => e.nombre && norm(e.nombre) === normNom);
+      }
+
+      if (empCli) {
+        // Si el cliente inscrito tiene nombre o documento por defecto, actualizarlo con los datos reales
+        if ((!empCli.nombre || empCli.nombre === "Cliente Emprendamos" || empCli.nombre === "Cliente" || !empCli.cliente_id || !empCli.documento) && (nomFinal !== "Cliente" || docFinal)) {
+          try {
+            await entities.EmprendamosCliente.update(empCli.id, {
+              nombre: nomFinal !== "Cliente" ? nomFinal : empCli.nombre,
+              documento: docFinal || empCli.documento || "",
+              cliente_id: clienteId || empCli.cliente_id || "",
+              ...(telFinal ? { telefono: telFinal } : {})
+            });
+            if (nomFinal !== "Cliente") empCli.nombre = nomFinal;
+            if (docFinal) empCli.documento = docFinal;
+            if (clienteId) empCli.cliente_id = clienteId;
+          } catch {}
+        }
+      } else {
+        try {
+          empCli = await entities.EmprendamosCliente.create({
+            cliente_id: clienteId,
+            nombre: nomFinal,
+            documento: docFinal,
+            telefono: telFinal,
+            estado: "activo",
+            dia_pago: dp,
+            saldo_deuda: monto,
+            capital_inicial: monto,
+            cupo_asignado: monto,
+            tasa_acordada: tasa,
+            tasa_extracupo: 0.06,
+            fecha_ingreso: fecha_corte,
+            notas: `Inscripción automática desde saldos iniciales ${c.codigo}`
+          });
+          if (empCli) allEmprendamosClientes.push(empCli);
+        } catch (eEmp) {
+          console.warn("No se pudo auto-crear EmprendamosCliente:", eEmp);
+        }
+      }
+
+      const empCliId = empCli?.id || clienteId;
+
+      creditosResueltos.push({
+        ...c,
+        monto,
+        dp,
+        tasa,
+        clienteId,
+        empCliId,
+        nomFinal
+      });
+
+      // Movimiento contable 120502 (Cartera Emprendamos)
       movsAsiento.push({
         subcuenta: "120502",
         debito: monto,
         credito: 0,
-        descripcion: `Saldo inicial crédito ${c.codigo} — ${nom}`,
-        tercero: nom,
-        cliente_id: c.cliente_id || null
+        descripcion: `Saldo inicial crédito ${c.codigo} — ${nomFinal}`,
+        tercero: nomFinal,
+        cliente_id: clienteId || null
       });
     }
 
@@ -5782,36 +5906,33 @@ export async function gestionarEmprendamos(entities, payload = {}) {
     const clientDebts = {};
     const createdCreds = [];
 
-    for (const c of creditos) {
-      const monto = Number(c.capital) || 0;
-      const dp = Number(c.dia_pago || c.diaPago) || 15;
+    for (const c of creditosResueltos) {
       const created = await entities.EmprendamosCredito.create({
         codigo: c.codigo,
         tipo: "habitual",
-        capital: monto,
-        saldo_capital: monto,
+        capital: c.monto,
+        saldo_capital: c.monto,
         estado: "vigente",
-        dia_pago: dp,
+        dia_pago: c.dp,
         saldo_intereses: 0,
         notas: c.notas || "",
         fecha: fecha_corte,
-        fecha_proximo_pago: `2026-09-${String(dp).padStart(2, "0")}`,
-        tasa_nominal: Number(c.tasa) || 0.03,
+        fecha_proximo_pago: `2026-09-${String(c.dp).padStart(2, "0")}`,
+        tasa_nominal: c.tasa,
         concepto: c.concepto || `Saldo inicial cartera a ${fecha_corte} — ${c.codigo}`,
         comprobante_id: comprobante_id,
         cuota_fija: 0,
-        cliente_id: c.cliente_id || "",
+        cliente_id: c.empCliId,
         producto_credito_id: "",
-        emprendamos_cliente_id: c.emprendamos_cliente_id || (c.cliente_id ? `emp_cli_${c.cliente_id}` : ""),
+        emprendamos_cliente_id: c.empCliId,
         created_date: `${fecha_corte}T00:00:00.000Z`,
         updated_date: `${fecha_corte}T00:00:00.000Z`,
         is_sample: false
       });
       createdCreds.push(created);
 
-      const empId = c.emprendamos_cliente_id || (c.cliente_id ? `emp_cli_${c.cliente_id}` : "");
-      if (empId) {
-        clientDebts[empId] = (clientDebts[empId] || 0) + monto;
+      if (c.empCliId) {
+        clientDebts[c.empCliId] = (clientDebts[c.empCliId] || 0) + c.monto;
       }
     }
 
