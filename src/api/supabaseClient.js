@@ -125,12 +125,8 @@ const LOCAL_STORAGE_TABLE_SEEDS = {
   emprendamos_interes: EMPRENDAMOS_INTERESES_SEED
 };
 
-export const LOCAL_MANAGED_TABLES = new Set([
-  'emprendamos_cliente',
-  'emprendamos_credito',
-  'emprendamos_abono',
-  'emprendamos_interes'
-]);
+// LOCAL_MANAGED_TABLES is disabled so all queries and mutations go directly to Supabase
+export const LOCAL_MANAGED_TABLES = new Set([]);
 
 const initializedLocalTables = new Set();
 
@@ -596,34 +592,79 @@ export function createEntityRepository(entityName) {
         }
 
         if (targetLimit <= 1000) {
+          let actualCol = col;
           let query = client.from(table).select('*');
-          if (col) {
-            query = query.order(col, { ascending: !isDesc });
-            if (col !== 'id') query = query.order('id', { ascending: !isDesc });
+          if (actualCol) {
+            query = query.order(actualCol, { ascending: !isDesc });
+            if (actualCol !== 'id') query = query.order('id', { ascending: !isDesc });
           }
           query = query.limit(targetLimit);
-          const { data, error } = await query;
+          let { data, error } = await query;
+          if (error && (error.message?.includes('does not exist') || error.code === '42703')) {
+            if (actualCol === 'created_date') {
+              actualCol = 'created_at';
+              const retry = await client.from(table).select('*').order(actualCol, { ascending: !isDesc }).limit(targetLimit);
+              if (!retry.error && Array.isArray(retry.data)) {
+                data = retry.data;
+                error = null;
+              }
+            }
+            if (error) {
+              const fallback = await client.from(table).select('*').limit(targetLimit);
+              if (!fallback.error && Array.isArray(fallback.data)) {
+                data = fallback.data;
+                error = null;
+              } else if (fallback.error) {
+                error = fallback.error;
+              }
+            }
+          }
           if (error) {
             handleRlsViolation(table, 'list', error);
             if (!error.message?.includes('schema cache')) {
               console.warn(`Supabase list error for ${table}:`, error.message);
             }
           } else if (Array.isArray(data)) {
-            dbData = data;
+            dbData = data.map(d => ({
+              ...d,
+              created_date: d.created_date || d.created_at,
+              updated_date: d.updated_date || d.updated_at
+            }));
           }
         } else {
           // Paginación por bloques para superar el límite de 1000 registros por query de PostgREST
           const PAGE_SIZE = 1000;
           let from = 0;
+          let actualCol = col;
           while (dbData.length < targetLimit) {
             const to = from + Math.min(PAGE_SIZE, targetLimit - dbData.length) - 1;
             let query = client.from(table).select('*');
-            if (col) {
-              query = query.order(col, { ascending: !isDesc });
-              if (col !== 'id') query = query.order('id', { ascending: !isDesc });
+            if (actualCol) {
+              query = query.order(actualCol, { ascending: !isDesc });
+              if (actualCol !== 'id') query = query.order('id', { ascending: !isDesc });
             }
             query = query.range(from, to);
-            const { data, error } = await query;
+            let { data, error } = await query;
+            if (error && (error.message?.includes('does not exist') || error.code === '42703')) {
+              if (actualCol === 'created_date') {
+                actualCol = 'created_at';
+                const retry = await client.from(table).select('*').order(actualCol, { ascending: !isDesc }).range(from, to);
+                if (!retry.error && Array.isArray(retry.data)) {
+                  data = retry.data;
+                  error = null;
+                }
+              }
+              if (error) {
+                actualCol = null;
+                const fallback = await client.from(table).select('*').range(from, to);
+                if (!fallback.error && Array.isArray(fallback.data)) {
+                  data = fallback.data;
+                  error = null;
+                } else if (fallback.error) {
+                  error = fallback.error;
+                }
+              }
+            }
             if (error) {
               handleRlsViolation(table, 'list', error);
               if (!error.message?.includes('schema cache')) {
@@ -632,7 +673,12 @@ export function createEntityRepository(entityName) {
               break;
             }
             if (!data || data.length === 0) break;
-            dbData.push(...data);
+            const mapped = data.map(d => ({
+              ...d,
+              created_date: d.created_date || d.created_at,
+              updated_date: d.updated_date || d.updated_at
+            }));
+            dbData.push(...mapped);
             if (data.length < PAGE_SIZE) break;
             from += data.length;
           }
@@ -653,7 +699,7 @@ export function createEntityRepository(entityName) {
           col = isDesc ? sort.slice(1) : sort;
         }
 
-        const applyCriteria = (q) => {
+        const applyCriteria = (q, orderCol = col) => {
           for (const [key, val] of Object.entries(criteria || {})) {
             if (val !== undefined && val !== null) {
               if (typeof val === 'object' && !Array.isArray(val)) {
@@ -668,34 +714,64 @@ export function createEntityRepository(entityName) {
               }
             }
           }
-          if (col) {
-            q = q.order(col, { ascending: !isDesc });
-            if (col !== 'id') q = q.order('id', { ascending: !isDesc });
+          if (orderCol) {
+            q = q.order(orderCol, { ascending: !isDesc });
+            if (orderCol !== 'id') q = q.order('id', { ascending: !isDesc });
           }
           return q;
         };
 
         let dbData = [];
         if (targetLimit <= 1000) {
-          let query = applyCriteria(client.from(table).select('*'));
+          let query = applyCriteria(client.from(table).select('*'), col);
           query = query.limit(targetLimit);
-          const { data, error } = await query;
+          let { data, error } = await query;
+          if (error && error.message?.includes('does not exist')) {
+            const altCol = col === 'created_date' ? 'created_at' : null;
+            const retryQ = applyCriteria(client.from(table).select('*'), altCol).limit(targetLimit);
+            const retryRes = await retryQ;
+            if (!retryRes.error && Array.isArray(retryRes.data)) {
+              data = retryRes.data;
+              error = null;
+            } else {
+              const fallback = applyCriteria(client.from(table).select('*'), null).limit(targetLimit);
+              const fbRes = await fallback;
+              if (!fbRes.error && Array.isArray(fbRes.data)) {
+                data = fbRes.data;
+                error = null;
+              }
+            }
+          }
           if (error) {
             if (!error.message?.includes('schema cache')) {
               console.warn(`Supabase filter error for ${table}:`, error.message);
             }
           } else if (Array.isArray(data)) {
-            dbData = data;
+            dbData = data.map(d => ({
+              ...d,
+              created_date: d.created_date || d.created_at,
+              updated_date: d.updated_date || d.updated_at
+            }));
           }
         } else {
           // Paginación por bloques para superar el límite de 1000 registros por query de PostgREST
           const PAGE_SIZE = 1000;
           let from = 0;
+          let actualCol = col;
           while (dbData.length < targetLimit) {
             const to = from + Math.min(PAGE_SIZE, targetLimit - dbData.length) - 1;
-            let query = applyCriteria(client.from(table).select('*'));
+            let query = applyCriteria(client.from(table).select('*'), actualCol);
             query = query.range(from, to);
-            const { data, error } = await query;
+            let { data, error } = await query;
+            if (error && error.message?.includes('does not exist')) {
+              actualCol = actualCol === 'created_date' ? 'created_at' : null;
+              const retry = applyCriteria(client.from(table).select('*'), actualCol).range(from, to);
+              const retryRes = await retry;
+              if (!retryRes.error && Array.isArray(retryRes.data)) {
+                data = retryRes.data;
+                error = null;
+              }
+            }
             if (error) {
               if (!error.message?.includes('schema cache')) {
                 console.warn(`Supabase filter error for ${table}:`, error.message);
@@ -703,7 +779,12 @@ export function createEntityRepository(entityName) {
               break;
             }
             if (!data || data.length === 0) break;
-            dbData.push(...data);
+            const mapped = data.map(d => ({
+              ...d,
+              created_date: d.created_date || d.created_at,
+              updated_date: d.updated_date || d.updated_at
+            }));
+            dbData.push(...mapped);
             if (data.length < PAGE_SIZE) break;
             from += data.length;
           }
@@ -802,10 +883,12 @@ export function createEntityRepository(entityName) {
             break;
           }
           lastError = error;
-          if (error?.message && error.message.includes('in the schema cache')) {
-            const match = error.message.match(/Could not find the '([^']+)' column/);
+          if (error?.message) {
+            const match = error.message.match(/Could not find the '([^']+)' column/) ||
+                          error.message.match(/column "?([a-zA-Z0-9_]+)"? of relation .* does not exist/i) ||
+                          error.message.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
             if (match && match[1] && match[1] in payload) {
-              console.warn(`[Supabase Schema Cache] Omitting unknown column '${match[1]}' for insert on '${table}'`);
+              console.warn(`[Supabase Schema] Omitting unknown column '${match[1]}' for insert on '${table}'`);
               delete payload[match[1]];
               continue;
             }
@@ -878,10 +961,12 @@ export function createEntityRepository(entityName) {
             break;
           }
           lastError = error;
-          if (error?.message && error.message.includes('in the schema cache')) {
-            const match = error.message.match(/Could not find the '([^']+)' column/);
+          if (error?.message) {
+            const match = error.message.match(/Could not find the '([^']+)' column/) ||
+                          error.message.match(/column "?([a-zA-Z0-9_]+)"? of relation .* does not exist/i) ||
+                          error.message.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
             if (match && match[1] && match[1] in payload) {
-              console.warn(`[Supabase Schema Cache] Omitting unknown column '${match[1]}' for update on '${table}'`);
+              console.warn(`[Supabase Schema] Omitting unknown column '${match[1]}' for update on '${table}'`);
               delete payload[match[1]];
               continue;
             }

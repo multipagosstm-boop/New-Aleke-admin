@@ -47,6 +47,8 @@ export default function ClienteEmprendamosDetail({
   onOpenSalida,
   onEliminarCredito,
   onEliminarAbono,
+  onEditarCredito,
+  onEditarAbono,
   onActualizarCliente
 }) {
   // Edición de plan o notas
@@ -335,6 +337,17 @@ export default function ClienteEmprendamosDetail({
                               >
                                 <TrendingDown className="w-3.5 h-3.5 text-primary" />
                               </Button>
+                              {onEditarCredito && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs text-primary"
+                                  title="Editar crédito"
+                                  onClick={() => onEditarCredito(c)}
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </Button>
+                              )}
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -399,15 +412,28 @@ export default function ClienteEmprendamosDetail({
                               })}
                             </td>
                             <td className="p-2.5 text-center">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 px-2 text-destructive"
-                                title="Eliminar abono y reversar saldos"
-                                onClick={() => onEliminarAbono(a.id)}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
+                              <div className="flex items-center justify-center gap-1">
+                                {onEditarAbono && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 px-2 text-xs text-primary"
+                                    title="Editar abono"
+                                    onClick={() => onEditarAbono(a)}
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </Button>
+                                )}
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs text-destructive"
+                                  title="Eliminar abono y reversar saldos"
+                                  onClick={() => onEliminarAbono(a.id)}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         );

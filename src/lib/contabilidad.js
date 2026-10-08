@@ -148,3 +148,152 @@ export const NIVEL_INDENT = {
   Subcuenta: 3,
   Auxiliar: 4
 };
+
+/**
+ * Evalúa el estado de corte y plazo de registro de extracto para una tarjeta / producto de crédito.
+ * Detecta si el corte más reciente ya ocurrió (incluso en el mes anterior) y alerta si falta su extracto.
+ *
+ * @param {Object} producto - Producto de crédito / tarjeta.
+ * @param {Array} extractos - Lista de extractos registrados.
+ * @param {Date} [fechaRef] - Fecha actual / referencia.
+ * @returns {Object|null}
+ */
+export function evaluarCicloCorteTarjeta(producto, extractos = [], fechaRef = new Date()) {
+  if (!producto || producto.estado !== "activo") return null;
+
+  const hoy = new Date(fechaRef);
+  hoy.setHours(0, 0, 0, 0);
+
+  const curYear = hoy.getFullYear();
+  const curMonth = hoy.getMonth(); // 0 = Ene, 8 = Sep, 9 = Oct
+
+  // 1. Día de corte en el mes actual
+  const diaCurrent = getDiaCorteEfectivo(producto, curYear, curMonth);
+  if (!diaCurrent) return null;
+  const fechaCorteCurrent = new Date(curYear, curMonth, diaCurrent);
+  fechaCorteCurrent.setHours(0, 0, 0, 0);
+
+  // 2. Día de corte en el mes anterior
+  const prevMonthIndex = curMonth === 0 ? 11 : curMonth - 1;
+  const prevYear = curMonth === 0 ? curYear - 1 : curYear;
+  const diaPrev = getDiaCorteEfectivo(producto, prevYear, prevMonthIndex);
+  const fechaCortePrev = diaPrev ? new Date(prevYear, prevMonthIndex, diaPrev) : null;
+  if (fechaCortePrev) fechaCortePrev.setHours(0, 0, 0, 0);
+
+  // 3. Día de corte en el mes siguiente
+  const nextMonthIndex = curMonth === 11 ? 0 : curMonth + 1;
+  const nextYear = curMonth === 11 ? curYear + 1 : curYear;
+  const diaNext = getDiaCorteEfectivo(producto, nextYear, nextMonthIndex);
+  const fechaCorteNext = diaNext ? new Date(nextYear, nextMonthIndex, diaNext) : null;
+  if (fechaCorteNext) fechaCorteNext.setHours(0, 0, 0, 0);
+
+  const extsProd = (extractos || []).filter((e) => e.producto_id === producto.id);
+
+  // Helper para verificar si un corte ya tiene extracto registrado o saltado
+  const tieneExtractoParaCorte = (fechaCorte) => {
+    if (!fechaCorte) return false;
+    const y = fechaCorte.getFullYear();
+    const m = fechaCorte.getMonth() + 1;
+    const mesStr = `${y}-${String(m).padStart(2, "0")}`;
+    const nextM = m === 12 ? 1 : m + 1;
+    const nextY = m === 12 ? y + 1 : y;
+    const nextMesStr = `${nextY}-${String(nextM).padStart(2, "0")}`;
+
+    return extsProd.some((e) => {
+      if (e.estado === "saltado") {
+        if (e.periodo === mesStr || e.periodo === nextMesStr) return true;
+      }
+      if (e.fecha_corte) {
+        const fc = new Date(e.fecha_corte + "T00:00:00");
+        const diffDias = Math.abs((fc - fechaCorte) / 86400000);
+        if (diffDias <= 5) return true;
+        if (e.fecha_corte.startsWith(mesStr)) return true;
+      }
+      if (e.periodo === mesStr) return true;
+      if (e.periodo === nextMesStr && e.fecha_corte && e.fecha_corte.startsWith(mesStr)) return true;
+      return false;
+    });
+  };
+
+  // Determinar qué corte evaluar como ciclo activo:
+  // Si hoy aún NO alcanza la fecha de corte del mes actual, el corte que debió ocurrir fue el del mes pasado.
+  // Si hoy ya alcanzó o superó la fecha de corte actual, el corte que debió ocurrir es el actual.
+  let corteAEvaluar = null;
+  let corteSiguiente = null;
+
+  if (hoy >= fechaCorteCurrent) {
+    corteAEvaluar = fechaCorteCurrent;
+    corteSiguiente = fechaCorteNext;
+  } else {
+    corteAEvaluar = fechaCortePrev;
+    corteSiguiente = fechaCorteCurrent;
+  }
+
+  if (!corteAEvaluar) return null;
+
+  const tieneExtracto = tieneExtractoParaCorte(corteAEvaluar);
+
+  if (tieneExtracto) {
+    // El corte evaluado ya está cubierto. El ciclo pendiente es el siguiente corte futuro.
+    const deadlineSiguiente = new Date(corteSiguiente);
+    deadlineSiguiente.setDate(deadlineSiguiente.getDate() + 5);
+    const diasFaltan = Math.max(0, Math.ceil((corteSiguiente - hoy) / 86400000));
+    const yS = corteSiguiente.getFullYear();
+    const mS = corteSiguiente.getMonth() + 1;
+
+    return {
+      cutoff: corteSiguiente,
+      deadline: deadlineSiguiente,
+      estado: "proximo",
+      diasDiferencia: diasFaltan,
+      tieneExtracto: true,
+      mensaje: `Próximo corte: ${String(corteSiguiente.getDate()).padStart(2, "0")}/${String(mS).padStart(2, "0")} (en ${diasFaltan} día${diasFaltan === 1 ? "" : "s"})`,
+      corteReal: corteSiguiente,
+      corteAEvaluar,
+      periodoEsperado: `${yS}-${String(mS).padStart(2, "0")}`
+    };
+  }
+
+  // Falta registrar extracto para el corte que ya ocurrió
+  const deadline = new Date(corteAEvaluar);
+  deadline.setDate(deadline.getDate() + 5);
+
+  let estado = "proximo";
+  let diasDiferencia = 0;
+  let mensaje = "";
+  const yC = corteAEvaluar.getFullYear();
+  const mC = corteAEvaluar.getMonth() + 1;
+  const fechaCorteFmt = `${String(corteAEvaluar.getDate()).padStart(2, "0")}/${String(mC).padStart(2, "0")}/${yC}`;
+
+  if (hoy > deadline) {
+    estado = "urgente";
+    diasDiferencia = Math.floor((hoy - deadline) / 86400000);
+    mensaje = `Cortó el ${fechaCorteFmt} · Plazo vencido hace ${diasDiferencia} día${diasDiferencia === 1 ? "" : "s"}`;
+  } else if (hoy >= corteAEvaluar && hoy <= deadline) {
+    estado = "en_plazo";
+    diasDiferencia = Math.max(0, Math.ceil((deadline - hoy) / 86400000));
+    mensaje = `Cortó el ${fechaCorteFmt} · En plazo (${diasDiferencia} día${diasDiferencia === 1 ? "" : "s"} restante${diasDiferencia === 1 ? "" : "s"})`;
+  } else {
+    estado = "proximo";
+    diasDiferencia = Math.ceil((corteAEvaluar - hoy) / 86400000);
+    mensaje = `Próximo corte: ${fechaCorteFmt} (en ${diasDiferencia} día${diasDiferencia === 1 ? "" : "s"})`;
+  }
+
+  // Período esperado: típicamente el mes de facturación/pago
+  const nextMC = mC === 12 ? 1 : mC + 1;
+  const nextYC = mC === 12 ? yC + 1 : yC;
+  const periodoSiguienteStr = `${nextYC}-${String(nextMC).padStart(2, "0")}`;
+
+  return {
+    cutoff: corteAEvaluar,
+    deadline,
+    estado,
+    diasDiferencia,
+    tieneExtracto: false,
+    mensaje,
+    corteReal: corteAEvaluar,
+    corteAEvaluar,
+    periodoEsperado: periodoSiguienteStr,
+    periodoCorte: `${yC}-${String(mC).padStart(2, "0")}`
+  };
+}

@@ -142,52 +142,27 @@ export default function ImportarCreditosDialog({
         }
       }
 
-      const clientDebts = {};
+      const creditosPayload = parsedCredits.map((p) => ({
+        codigo: p.codigo,
+        capital: p.capital,
+        tasa: p.tasa,
+        dia_pago: p.diaPago,
+        cliente_id: p.matchedCliente?.id || "",
+        emprendamos_cliente_id: p.empCli?.id || (p.matchedCliente ? `emp_cli_${p.matchedCliente.id}` : ""),
+        clienteNombre: p.clienteNombre,
+        concepto: `Saldo inicial cartera a 31 de agosto — ${p.codigo}`
+      }));
 
-      for (let i = 0; i < parsedCredits.length; i++) {
-        const p = parsedCredits[i];
-        const clienteId = p.matchedCliente?.id || "";
-        const emprendamosClienteId = p.empCli?.id || (p.matchedCliente ? `emp_cli_${p.matchedCliente.id}` : "");
-
-        await base44.entities.EmprendamosCredito.create({
-          codigo: p.codigo,
-          tipo: "cartera_inicial",
-          capital: p.capital,
-          saldo_capital: p.capital,
-          estado: "vigente",
-          dia_pago: p.diaPago,
-          saldo_intereses: 0,
-          notas: "",
-          fecha: "2026-08-31",
-          fecha_proximo_pago: `2026-09-${String(p.diaPago).padStart(2, "0")}`,
-          tasa_nominal: p.tasa,
-          concepto: `Saldo inicial cartera a 31 de agosto — ${p.codigo}`,
-          comprobante_id: "",
-          cuota_fija: 0,
-          cliente_id: clienteId,
-          producto_credito_id: "",
-          emprendamos_cliente_id: emprendamosClienteId,
-          created_date: "2026-08-31T00:00:00.000Z",
-          updated_date: "2026-08-31T00:00:00.000Z",
-          is_sample: false
-        });
-
-        if (emprendamosClienteId) {
-          clientDebts[emprendamosClienteId] = (clientDebts[emprendamosClienteId] || 0) + p.capital;
-        }
-      }
-
-      // Update clients debt
-      for (const [empId, totalCap] of Object.entries(clientDebts)) {
-        await base44.entities.EmprendamosCliente.update(empId, {
-          saldo_deuda: totalCap,
-          capital_inicial: totalCap
-        }).catch(() => {});
-      }
+      const res = await base44.functions.invoke("gestionarEmprendamos", {
+        accion: "montarCreditosIniciales",
+        creditos: creditosPayload,
+        reemplazarExistentes,
+        fecha_corte: "2026-08-31"
+      });
 
       toast({
         title: "¡Créditos importados con éxito!",
-        description: `Se montaron ${parsedCredits.length} créditos a corte 31 de agosto.`
+        description: `Se montaron ${parsedCredits.length} créditos a corte 31 de agosto y se generó el asiento contable (120502 vs 310505).`
       });
 
       if (onSuccess) onSuccess();

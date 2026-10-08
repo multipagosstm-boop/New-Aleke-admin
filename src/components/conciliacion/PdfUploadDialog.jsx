@@ -33,17 +33,17 @@ const CARGOS_KEYS = [
   { key: "otros_gastos", label: "Otros gastos", defaultSub: "510507" }
 ];
 
-export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, productos }) {
+export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, productos, productoInicial = "", periodoInicial = "" }) {
   const [step, setStep] = useState("upload"); // upload | extracting | preview | confirming | done
   const [file, setFile] = useState(null);
   const [extracted, setExtracted] = useState(null);
-  const [productoSel, setProductoSel] = useState("");
+  const [productoSel, setProductoSel] = useState(productoInicial || "");
   const [error, setError] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [cargosDestino, setCargosDestino] = useState({});
   const [cuentasTransaccionales, setCuentasTransaccionales] = useState([]);
   const [clientes, setClientes] = useState([]);
-  const [periodoSel, setPeriodoSel] = useState("");
+  const [periodoSel, setPeriodoSel] = useState(periodoInicial || "");
   const [extractoExistente, setExtractoExistente] = useState(null);
   const [productosLocales, setProductosLocales] = useState(productos);
   const [showTarjetaForm, setShowTarjetaForm] = useState(false);
@@ -52,6 +52,13 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
   const inputRef = useRef(null);
 
   useEffect(() => { setProductosLocales(productos); }, [productos]);
+
+  useEffect(() => {
+    if (open) {
+      if (productoInicial) setProductoSel(productoInicial);
+      if (periodoInicial) setPeriodoSel(periodoInicial);
+    }
+  }, [open, productoInicial, periodoInicial]);
 
   const refreshProductos = async () => {
     const prods = await base44.entities.ProductoCredito.list();
@@ -200,9 +207,9 @@ export default function PdfUploadDialog({ open, onOpenChange, onConfirmado, prod
       if (resp.data?.error) throw new Error(resp.data.error);
 
       setExtracted(resp.data);
-      setProductoSel(resp.data.producto_match?.id || "");
+      setProductoSel(resp.data.producto_match?.id || productoInicial || productoSel || "");
       const lastPeriodo = getLastPeriodo();
-      setPeriodoSel(lastPeriodo || resp.data.periodo || "");
+      setPeriodoSel(resp.data.periodo || periodoInicial || lastPeriodo || "");
       const cuentas = await base44.entities.Cuenta.filter({ es_transaccional: true }, undefined, 500);
       setCuentasTransaccionales(cuentas);
       const cli = await base44.entities.Cliente.list();

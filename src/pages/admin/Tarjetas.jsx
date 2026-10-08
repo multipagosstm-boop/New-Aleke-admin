@@ -63,12 +63,12 @@ export default function Tarjetas() {
   const pucMap = {};
   pucTransaccional.forEach((c) => {pucMap[String(c.codigo)] = c;});
 
-  // Extracto pendiente más reciente por producto (para saldo a deber / próximo pago)
+  // Extracto pendiente más próximo a vencer por producto (para saldo a deber / próximo pago)
   const extractoPendientePorProducto = {};
   extractos.forEach((e) => {
     if (e.estado !== "pendiente_pago") return;
     const existing = extractoPendientePorProducto[e.producto_id];
-    if (!existing || (e.fecha_pago || "") > (existing.fecha_pago || "")) {
+    if (!existing || (e.fecha_pago || "9999-99-99") < (existing.fecha_pago || "9999-99-99")) {
       extractoPendientePorProducto[e.producto_id] = e;
     }
   });

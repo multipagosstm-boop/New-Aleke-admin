@@ -17,7 +17,8 @@ import {
   Trash2,
   LogOut,
   Calendar,
-  TrendingDown
+  TrendingDown,
+  Pencil
 } from "lucide-react";
 import { formatCOP, formatDate, hoyLocal } from "@/lib/contabilidad";
 import {
@@ -36,6 +37,8 @@ import SalidaClienteDialog from "@/components/emprendamos/SalidaClienteDialog";
 import ClienteEmprendamosDetail from "@/components/emprendamos/ClienteEmprendamosDetail";
 import AvisosPanel from "@/components/emprendamos/AvisosPanel";
 import ImportarCreditosDialog from "@/components/emprendamos/ImportarCreditosDialog";
+import EditarCreditoDialog from "@/components/emprendamos/EditarCreditoDialog";
+import EditarAbonoDialog from "@/components/emprendamos/EditarAbonoDialog";
 import { useToast } from "@/components/ui/use-toast";
 import { FileSpreadsheet } from "lucide-react";
 
@@ -58,7 +61,7 @@ export default function Emprendamos() {
   const [busquedaClientes, setBusquedaClientes] = useState("");
   const [filtroEstadoCliente, setFiltroEstadoCliente] = useState("activos"); // 'activos' | 'todos' | 'salidos'
   const [busquedaCreditos, setBusquedaCreditos] = useState("");
-  const [filtroTipoCredito, setFiltroTipoCredito] = useState("todos"); // 'todos' | 'habitual' | 'extracupo' | 'cartera_inicial' | 'comision'
+  const [filtroTipoCredito, setFiltroTipoCredito] = useState("todos"); // 'todos' | 'habitual' | 'extracupo'
 
   // Estados de Modales
   const [openInscribir, setOpenInscribir] = useState(false);
@@ -71,6 +74,10 @@ export default function Emprendamos() {
   const [openSalida, setOpenSalida] = useState(false);
   const [openFichaDetail, setOpenFichaDetail] = useState(false);
   const [openImportarCreditos, setOpenImportarCreditos] = useState(false);
+  const [openEditarCredito, setOpenEditarCredito] = useState(false);
+  const [creditoAEditar, setCreditoAEditar] = useState(null);
+  const [openEditarAbono, setOpenEditarAbono] = useState(false);
+  const [abonoAEditar, setAbonoAEditar] = useState(null);
 
   // Cliente o crédito seleccionado para modales contextuales
   const [selectedInscrito, setSelectedInscrito] = useState(null);
@@ -195,7 +202,12 @@ export default function Emprendamos() {
       const q = busquedaCreditos.toLowerCase();
 
       const coincideBusqueda = !q || nombre.includes(q) || cod.includes(q) || conc.includes(q);
-      const coincideTipo = filtroTipoCredito === "todos" || c.tipo === filtroTipoCredito;
+      const coincideTipo =
+        filtroTipoCredito === "todos"
+          ? true
+          : filtroTipoCredito === "habitual"
+          ? (c.tipo === "habitual" || c.tipo === "cartera_inicial")
+          : c.tipo === "extracupo";
 
       return coincideBusqueda && coincideTipo;
     });
@@ -634,19 +646,11 @@ export default function Emprendamos() {
               </Button>
               <Button
                 size="sm"
-                variant={filtroTipoCredito === "cartera_inicial" ? "secondary" : "ghost"}
-                onClick={() => setFiltroTipoCredito("cartera_inicial")}
-                className="h-8 text-xs"
-              >
-                Iniciales
-              </Button>
-              <Button
-                size="sm"
                 variant={filtroTipoCredito === "habitual" ? "secondary" : "ghost"}
                 onClick={() => setFiltroTipoCredito("habitual")}
                 className="h-8 text-xs"
               >
-                Habituales (3%)
+                Habituales
               </Button>
               <Button
                 size="sm"
@@ -654,15 +658,7 @@ export default function Emprendamos() {
                 onClick={() => setFiltroTipoCredito("extracupo")}
                 className="h-8 text-xs"
               >
-                Extracupo (6%)
-              </Button>
-              <Button
-                size="sm"
-                variant={filtroTipoCredito === "comision" ? "secondary" : "ghost"}
-                onClick={() => setFiltroTipoCredito("comision")}
-                className="h-8 text-xs"
-              >
-                Comisiones (10%)
+                Extracupos
               </Button>
               <Button
                 size="sm"
@@ -748,6 +744,18 @@ export default function Emprendamos() {
                           <Button
                             size="sm"
                             variant="ghost"
+                            className="h-7 px-2 text-xs text-primary"
+                            title="Editar crédito"
+                            onClick={() => {
+                              setCreditoAEditar(c);
+                              setOpenEditarCredito(true);
+                            }}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
                             className="h-7 px-2 text-xs text-destructive"
                             title="Eliminar crédito"
                             onClick={() => handleEliminarCredito(c.id)}
@@ -813,15 +821,29 @@ export default function Emprendamos() {
                           })}
                         </td>
                         <td className="p-3 text-center">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-destructive"
-                            title="Eliminar abono y reversar saldos"
-                            onClick={() => handleEliminarAbono(a.id)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-primary"
+                              title="Editar abono"
+                              onClick={() => {
+                                setAbonoAEditar(a);
+                                setOpenEditarAbono(true);
+                              }}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-destructive"
+                              title="Eliminar abono y reversar saldos"
+                              onClick={() => handleEliminarAbono(a.id)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -927,8 +949,28 @@ export default function Emprendamos() {
         inscritos={inscritos.filter((i) => i.estado === "activo")}
         clientes={clientes}
         productos={productos}
+        creditos={creditos}
         clientePreseleccionadoId={preselectedClienteId}
         onSuccess={handleSuccessAction}
+      />
+
+      <EditarCreditoDialog
+        open={openEditarCredito}
+        onOpenChange={setOpenEditarCredito}
+        credito={creditoAEditar}
+        clientes={clientes}
+        inscritos={inscritos}
+        onSuccess={loadData}
+      />
+
+      <EditarAbonoDialog
+        open={openEditarAbono}
+        onOpenChange={setOpenEditarAbono}
+        abono={abonoAEditar}
+        clientes={clientes}
+        creditos={creditos}
+        puc={puc}
+        onSuccess={loadData}
       />
 
       <RegistrarAbonoDialog
@@ -994,6 +1036,14 @@ export default function Emprendamos() {
         onOpenSalida={handleAbrirSalida}
         onEliminarCredito={handleEliminarCredito}
         onEliminarAbono={handleEliminarAbono}
+        onEditarCredito={(c) => {
+          setCreditoAEditar(c);
+          setOpenEditarCredito(true);
+        }}
+        onEditarAbono={(a) => {
+          setAbonoAEditar(a);
+          setOpenEditarAbono(true);
+        }}
         onActualizarCliente={handleActualizarCliente}
       />
 

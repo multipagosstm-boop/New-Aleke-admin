@@ -309,29 +309,14 @@ export default function RegistrarAbonoDialog({
               <Wallet className="w-3.5 h-3.5 text-emerald-600" />
               Cuenta Contable de Ingreso del Dinero (Bancos / Caja) *
             </Label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <Select value={cdaIngresoId} onValueChange={handleSelectCda}>
-                <SelectTrigger className="text-xs">
-                  <SelectValue placeholder="CDA donde ingresó..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {cdas.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.nombre || c.banco} ({formatCOP(c.saldo)})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <SearchableSelect
-                value={subcuentaIngreso}
-                onValueChange={setSubcuentaIngreso}
-                placeholder="Buscar subcuenta de ingreso..."
-                searchPlaceholder="Código o nombre de cuenta PUC..."
-                options={pucOptions}
-                triggerClassName="h-9 text-xs"
-              />
-            </div>
+            <SearchableSelect
+              value={subcuentaIngreso}
+              onValueChange={setSubcuentaIngreso}
+              placeholder="Buscar subcuenta de ingreso (ej. 111005 Bancos, 110505 Caja)..."
+              searchPlaceholder="Código o nombre de cuenta PUC..."
+              options={pucOptions}
+              triggerClassName="h-9 text-xs w-full"
+            />
           </div>
 
           {/* TABLA DE IMPUTACIÓN A CRÉDITOS */}

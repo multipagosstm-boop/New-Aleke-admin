@@ -5072,26 +5072,61 @@ export async function gestionarEmprendamos(entities, payload = {}) {
       });
       comprobante = compRes?.comprobante;
 
-      const codigo = await generarCodigoCreditoEmprendamos(entities);
-      credito = await entities.EmprendamosCredito.create({
-        emprendamos_cliente_id,
-        cliente_id: inscrito.cliente_id,
-        codigo,
-        tipo: "comision",
-        concepto: `Comisión ${tdcProducto?.nombre || "nuevo producto"} (${(pct * 100).toFixed(0)}%)`,
-        capital: comisionMonto,
-        tasa_nominal: 0,
-        cuota_fija: 0,
-        fecha,
-        dia_pago: inscrito.dia_pago,
-        fecha_proximo_pago: "",
-        saldo_capital: comisionMonto,
-        saldo_intereses: 0,
-        estado: "vigente",
-        comprobante_id: comprobante?.id || null,
-        producto_credito_id: producto_credito_id || "",
-        notas: notas || ""
-      });
+      if (payload.credito_destino_id) {
+        const crDestino = await entities.EmprendamosCredito.get(payload.credito_destino_id);
+        if (crDestino) {
+          const notasActualizadas = [
+            crDestino.notas,
+            `+ Comisión 10% ($${comisionMonto}) por nuevo producto ${tdcProducto?.nombre || payload.producto || 'bancario'}`
+          ].filter(Boolean).join("\n");
+
+          credito = await entities.EmprendamosCredito.update(crDestino.id, {
+            capital: (Number(crDestino.capital) || 0) + comisionMonto,
+            saldo_capital: (Number(crDestino.saldo_capital) || 0) + comisionMonto,
+            notas: notasActualizadas
+          });
+        }
+      }
+
+      if (!credito) {
+        const codigo = await generarCodigoCreditoEmprendamos(entities);
+        credito = await entities.EmprendamosCredito.create({
+          emprendamos_cliente_id,
+          cliente_id: inscrito.cliente_id,
+          codigo,
+          tipo: "habitual",
+          concepto: `Comisión ${tdcProducto?.nombre || "nuevo producto"} (${(pct * 100).toFixed(0)}%)`,
+          capital: comisionMonto,
+          tasa_nominal: 0,
+          cuota_fija: 0,
+          fecha,
+          dia_pago: inscrito.dia_pago,
+          fecha_proximo_pago: "",
+          saldo_capital: comisionMonto,
+          saldo_intereses: 0,
+          estado: "vigente",
+          comprobante_id: comprobante?.id || null,
+          producto_credito_id: producto_credito_id || "",
+          notas: notas || ""
+        });
+      }
+
+      try {
+        await entities.EmprendamosProducto.create({
+          cliente_id: inscrito.cliente_id,
+          tipo_producto: payload.tipo_producto || (tdcProducto ? 'tarjeta_credito' : 'otro'),
+          nombre: tdcProducto?.nombre || payload.producto || "Nuevo producto bancario",
+          banco: tdcProducto?.banco || payload.banco || "",
+          cupo: baseCalculo,
+          porcentaje_comision: Math.round(pct * 100),
+          monto_comision: comisionMonto,
+          credito_cargado_id: credito?.id || payload.credito_destino_id || null,
+          fecha_registro: fecha,
+          estado: 'activo'
+        });
+      } catch (errProd) {
+        console.warn("No se pudo registrar en EmprendamosProducto:", errProd);
+      }
 
       await entities.EmprendamosCliente.update(emprendamos_cliente_id, {
         saldo_deuda: (Number(inscrito.saldo_deuda) || 0) + comisionMonto
@@ -5519,6 +5554,282 @@ export async function gestionarEmprendamos(entities, payload = {}) {
 
     await entities.EmprendamosCliente.update(emprendamos_cliente_id, upd);
     return { success: true };
+  }
+
+  // 12. EDITAR CRÉDITO (Permite modificar todos los campos y recalcular asiento si aplica)
+  if (accion === "editarCredito") {
+    const {
+      credito_id,
+      codigo,
+      tipo,
+      capital,
+      saldo_capital,
+      saldo_intereses,
+      tasa_nominal,
+      dia_pago,
+      fecha,
+      fecha_proximo_pago,
+      estado,
+      concepto,
+      notas,
+      cliente_id,
+      actualizar_asiento = true
+    } = payload;
+
+    const c = await entities.EmprendamosCredito.get(credito_id);
+    if (!c) throw new Error("Crédito no encontrado");
+
+    const upd = {};
+    if (codigo !== undefined) upd.codigo = codigo;
+    if (tipo !== undefined) upd.tipo = tipo;
+    if (capital !== undefined) upd.capital = Number(capital);
+    if (saldo_capital !== undefined) upd.saldo_capital = Number(saldo_capital);
+    if (saldo_intereses !== undefined) upd.saldo_intereses = Number(saldo_intereses);
+    if (tasa_nominal !== undefined) upd.tasa_nominal = Number(tasa_nominal);
+    if (dia_pago !== undefined) upd.dia_pago = Number(dia_pago);
+    if (fecha !== undefined) upd.fecha = fecha;
+    if (fecha_proximo_pago !== undefined) upd.fecha_proximo_pago = fecha_proximo_pago;
+    if (estado !== undefined) upd.estado = estado;
+    if (concepto !== undefined) upd.concepto = concepto;
+    if (notas !== undefined) upd.notas = notas;
+    if (cliente_id !== undefined) upd.cliente_id = cliente_id;
+
+    await entities.EmprendamosCredito.update(credito_id, upd);
+
+    // Si cambió capital o saldo_capital, recalcular el cliente
+    const ins = await entities.EmprendamosCliente.get(c.emprendamos_cliente_id);
+    if (ins) {
+      const allCreds = await entities.EmprendamosCredito.filter({ emprendamos_cliente_id: ins.id }).catch(() => []);
+      const deudaTotal = (allCreds || []).reduce((acc, cr) => {
+        const row = cr.id === credito_id ? { ...cr, ...upd } : cr;
+        if (row.estado === "anulado" || row.estado === "saldado") return acc;
+        return acc + (Number(row.saldo_capital) || 0) + (Number(row.saldo_intereses) || 0);
+      }, 0);
+      await entities.EmprendamosCliente.update(ins.id, { saldo_deuda: Math.max(0, deudaTotal) });
+    }
+
+    // Si el crédito tiene un comprobante contable de saldo inicial y cambió el capital
+    if (actualizar_asiento && c.comprobante_id && capital !== undefined && Number(capital) !== Number(c.capital)) {
+      try {
+        const movs = await entities.MovimientoContable.filter({ comprobante_id: c.comprobante_id }).catch(() => []);
+        if (movs && movs.length > 0) {
+          const nuevoMonto = Number(capital);
+          for (const m of movs) {
+            if (Number(m.debito) > 0) {
+              await entities.MovimientoContable.update(m.id, { debito: nuevoMonto });
+            } else if (Number(m.credito) > 0) {
+              await entities.MovimientoContable.update(m.id, { credito: nuevoMonto });
+            }
+          }
+          await entities.ComprobanteContable.update(c.comprobante_id, {
+            total_debito: nuevoMonto,
+            total_credito: nuevoMonto
+          });
+          await recalcularSaldos(entities);
+        }
+      } catch (errAsiento) {
+        console.warn("No se pudo actualizar el asiento del crédito:", errAsiento);
+      }
+    }
+
+    return { success: true };
+  }
+
+  // 13. EDITAR ABONO (Permite modificar todos los campos y ajustar créditos y contabilidad)
+  if (accion === "editarAbono") {
+    const {
+      abono_id,
+      valor_total,
+      fecha,
+      subcuenta_ingreso,
+      tipo,
+      notas,
+      detalles
+    } = payload;
+
+    const abono = await entities.EmprendamosAbono.get(abono_id);
+    if (!abono) throw new Error("Abono no encontrado");
+
+    // 1. Reversar aplicación anterior en los créditos
+    const oldDetalles = Array.isArray(abono.detalles) ? abono.detalles : [];
+    for (const d of oldDetalles) {
+      const cr = await entities.EmprendamosCredito.get(d.credito_id);
+      if (cr) {
+        await entities.EmprendamosCredito.update(cr.id, {
+          saldo_capital: (Number(cr.saldo_capital) || 0) + (Number(d.capital) || 0),
+          saldo_intereses: (Number(cr.saldo_intereses) || 0) + (Number(d.intereses) || 0),
+          estado: "vigente"
+        });
+      }
+    }
+
+    // 2. Aplicar los nuevos detalles a los créditos
+    const newDetalles = Array.isArray(detalles) ? detalles : oldDetalles;
+    for (const d of newDetalles) {
+      const cr = await entities.EmprendamosCredito.get(d.credito_id);
+      if (cr) {
+        const nuevoSaldoCap = Math.max(0, (Number(cr.saldo_capital) || 0) - (Number(d.capital) || 0));
+        const nuevoSaldoInt = Math.max(0, (Number(cr.saldo_intereses) || 0) - (Number(d.intereses) || 0));
+        await entities.EmprendamosCredito.update(cr.id, {
+          saldo_capital: nuevoSaldoCap,
+          saldo_intereses: nuevoSaldoInt,
+          estado: (nuevoSaldoCap === 0 && nuevoSaldoInt === 0) ? "saldado" : "vigente"
+        });
+      }
+    }
+
+    const nuevoTotal = valor_total !== undefined ? Number(valor_total) : Number(abono.valor_total);
+    const updAbono = {
+      valor_total: nuevoTotal,
+      detalles: newDetalles
+    };
+    if (fecha !== undefined) updAbono.fecha = fecha;
+    if (subcuenta_ingreso !== undefined) updAbono.subcuenta_ingreso = subcuenta_ingreso;
+    if (tipo !== undefined) updAbono.tipo = tipo;
+    if (notas !== undefined) updAbono.notas = notas;
+
+    await entities.EmprendamosAbono.update(abono_id, updAbono);
+
+    // 3. Actualizar deuda del cliente inscrito
+    const ins = await entities.EmprendamosCliente.get(abono.emprendamos_cliente_id);
+    if (ins) {
+      const allCreds = await entities.EmprendamosCredito.filter({ emprendamos_cliente_id: ins.id }).catch(() => []);
+      const deudaTotal = (allCreds || []).reduce((acc, cr) => {
+        if (cr.estado === "anulado" || cr.estado === "saldado") return acc;
+        return acc + (Number(cr.saldo_capital) || 0) + (Number(cr.saldo_intereses) || 0);
+      }, 0);
+      await entities.EmprendamosCliente.update(ins.id, { saldo_deuda: Math.max(0, deudaTotal) });
+    }
+
+    // 4. Actualizar comprobante contable si existe
+    if (abono.comprobante_id) {
+      try {
+        const movs = await entities.MovimientoContable.filter({ comprobante_id: abono.comprobante_id }).catch(() => []);
+        for (const m of (movs || [])) {
+          if (m.subcuenta === "120502" && Number(m.credito) > 0) {
+            await entities.MovimientoContable.update(m.id, { credito: nuevoTotal });
+          } else if (Number(m.debito) > 0) {
+            const updM = { debito: nuevoTotal };
+            if (subcuenta_ingreso) updM.subcuenta = String(subcuenta_ingreso);
+            await entities.MovimientoContable.update(m.id, updM);
+          }
+        }
+        await entities.ComprobanteContable.update(abono.comprobante_id, {
+          fecha: fecha || abono.fecha,
+          total_debito: nuevoTotal,
+          total_credito: nuevoTotal
+        });
+        await recalcularSaldos(entities);
+      } catch (errComp) {
+        console.warn("No se pudo actualizar el comprobante del abono:", errComp);
+      }
+    }
+
+    return { success: true };
+  }
+
+  // 14. MONTAR CRÉDITOS INICIALES (CSV / Lote con asiento contable al 31 de agosto)
+  if (accion === "montarCreditosIniciales") {
+    const { creditos = [], reemplazarExistentes = true, fecha_corte = "2026-08-31" } = payload;
+    if (!Array.isArray(creditos) || creditos.length === 0) {
+      throw new Error("No hay créditos para montar");
+    }
+
+    if (reemplazarExistentes) {
+      const existing = await entities.EmprendamosCredito.list("-created_date", 2000).catch(() => []);
+      for (const cr of (existing || [])) {
+        await entities.EmprendamosCredito.delete(cr.id).catch(() => {});
+      }
+    }
+
+    const granTotal = creditos.reduce((s, c) => s + (Number(c.capital) || 0), 0);
+    const movsAsiento = [];
+
+    // Por cada crédito, un débito a 120502 (Cartera Emprendamos)
+    for (const c of creditos) {
+      const monto = Number(c.capital) || 0;
+      if (monto <= 0) continue;
+      const cli = c.cliente_id ? await entities.Cliente.get(c.cliente_id).catch(() => null) : null;
+      const nom = cli?.nombre || c.clienteNombre || "Cliente";
+      movsAsiento.push({
+        subcuenta: "120502",
+        debito: monto,
+        credito: 0,
+        descripcion: `Saldo inicial crédito ${c.codigo} — ${nom}`,
+        tercero: nom,
+        cliente_id: c.cliente_id || null
+      });
+    }
+
+    // Contrapartida a Capital Social / Saldos Iniciales (310505)
+    movsAsiento.push({
+      subcuenta: "310505",
+      debito: 0,
+      credito: granTotal,
+      descripcion: `Contrapartida saldos iniciales cartera Emprendamos a corte ${fecha_corte}`,
+      tercero: "Patrimonio / Saldos Iniciales",
+      cliente_id: null
+    });
+
+    const compRes = await createComprobante(entities, {
+      tipo: "diario",
+      fecha: fecha_corte,
+      descripcion: `Saldos iniciales cartera Emprendamos a corte ${fecha_corte}`,
+      movimientos: movsAsiento
+    });
+
+    const comprobante_id = compRes?.comprobante?.id || null;
+    const clientDebts = {};
+    const createdCreds = [];
+
+    for (const c of creditos) {
+      const monto = Number(c.capital) || 0;
+      const dp = Number(c.dia_pago || c.diaPago) || 15;
+      const created = await entities.EmprendamosCredito.create({
+        codigo: c.codigo,
+        tipo: "habitual",
+        capital: monto,
+        saldo_capital: monto,
+        estado: "vigente",
+        dia_pago: dp,
+        saldo_intereses: 0,
+        notas: c.notas || "",
+        fecha: fecha_corte,
+        fecha_proximo_pago: `2026-09-${String(dp).padStart(2, "0")}`,
+        tasa_nominal: Number(c.tasa) || 0.03,
+        concepto: c.concepto || `Saldo inicial cartera a ${fecha_corte} — ${c.codigo}`,
+        comprobante_id: comprobante_id,
+        cuota_fija: 0,
+        cliente_id: c.cliente_id || "",
+        producto_credito_id: "",
+        emprendamos_cliente_id: c.emprendamos_cliente_id || (c.cliente_id ? `emp_cli_${c.cliente_id}` : ""),
+        created_date: `${fecha_corte}T00:00:00.000Z`,
+        updated_date: `${fecha_corte}T00:00:00.000Z`,
+        is_sample: false
+      });
+      createdCreds.push(created);
+
+      const empId = c.emprendamos_cliente_id || (c.cliente_id ? `emp_cli_${c.cliente_id}` : "");
+      if (empId) {
+        clientDebts[empId] = (clientDebts[empId] || 0) + monto;
+      }
+    }
+
+    for (const [empId, totalCap] of Object.entries(clientDebts)) {
+      await entities.EmprendamosCliente.update(empId, {
+        saldo_deuda: totalCap,
+        capital_inicial: totalCap
+      }).catch(() => {});
+    }
+
+    await recalcularSaldos(entities);
+
+    return {
+      success: true,
+      count: createdCreds.length,
+      granTotal,
+      comprobante_id
+    };
   }
 
   return { success: true };

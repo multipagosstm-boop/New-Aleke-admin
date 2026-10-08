@@ -3,7 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Clock, DollarSign, CheckCircle2, Printer, FileText, FileUp, ChevronLeft, ChevronRight, Search, CalendarClock, ArrowUp, ArrowDown, ArrowUpDown, RefreshCw, SkipForward, RotateCcw, Trash2, Gift, Calendar, AlertCircle } from "lucide-react";
+import { Clock, DollarSign, CheckCircle2, Printer, FileText, FileUp, ChevronLeft, ChevronRight, Search, CalendarClock, ArrowUp, ArrowDown, ArrowUpDown, RefreshCw, SkipForward, RotateCcw, Trash2, Gift, Calendar, AlertCircle, AlertTriangle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +18,7 @@ const shiftMonth = (periodo, delta) => {
   const d = new Date(y, m - 1 + delta, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
-import { formatCOP, BANCO_NAMES, TIPO_PRODUCTO, formatDate } from "@/lib/contabilidad";
+import { formatCOP, BANCO_NAMES, TIPO_PRODUCTO, formatDate, evaluarCicloCorteTarjeta, getCorteDisplayText, getDiaCorteEfectivo } from "@/lib/contabilidad";
 import ExtractoCard from "@/components/admin/ExtractoCard";
 import InformePagos from "@/components/admin/InformePagos";
 import InformeGastosFinancieros from "@/components/admin/InformeGastosFinancieros";
@@ -75,30 +75,8 @@ export default function Extractos() {
       .some((v) => normalize(v).includes(q));
   };
 
-  const calcularPlazo = (p) => {
-    const dia = Number(p.fecha_corte);
-    if (!dia || !periodoRegistro) return null;
-    const [y, m] = periodoRegistro.split("-").map(Number);
-    // Para cortes finales (corte + 5 > días del mes), el deadline caería en el mes siguiente.
-    // Usar el corte del mes ANTERIOR para que el plazo quede en los primeros días del mes de registro.
-    const diasMes = new Date(y, m, 0).getDate();
-    let cAnio = y, cMes = m;
-    if (dia + 5 > diasMes) {
-      cMes = m - 1;
-      if (cMes === 0) { cMes = 12; cAnio -= 1; }
-    }
-    const diasCorteMes = new Date(cAnio, cMes, 0).getDate();
-    const diaCorte = Math.min(dia, diasCorteMes);
-    const cutoff = new Date(cAnio, cMes - 1, diaCorte);
-    const deadline = new Date(cutoff);
-    deadline.setDate(deadline.getDate() + 5);
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    let estado = "proximo";
-    if (hoy >= cutoff && hoy <= deadline) estado = "en_plazo";
-    else if (hoy > deadline) estado = "urgente";
-    return { cutoff, deadline, estado };
-  };
+  const [modoRegistro, setModoRegistro] = useState("pendientes_corte"); // "pendientes_corte" | "por_mes"
+  const [pdfModalTarget, setPdfModalTarget] = useState({ open: false, productoId: "", periodo: "" });
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -146,19 +124,111 @@ export default function Extractos() {
     return Array.from(s).sort().reverse();
   }, [extractos]);
 
-  const productosConExtractoRegistro = new Set(
-    extractos.filter((e) => e.periodo === periodoRegistro).map((e) => e.producto_id)
-  );
-  const pendientesRegistroTotal = productos.filter(
-    (p) => p.estado === "activo" && !productosConExtractoRegistro.has(p.id) && matchBusquedaProducto(p)
-  );
-  const pendientesRegistro = pendientesRegistroTotal.filter((p) => {
-    if (filtroPlazo === "todos") return true;
-    const plazo = calcularPlazo(p);
-    if (!plazo) return false;
-    if (filtroPlazo === "para_registrar") return plazo.estado === "urgente" || plazo.estado === "en_plazo";
-    return plazo.estado === "proximo";
-  });
+  // Evaluación del ciclo de corte y extracto para todos los productos activos
+  const evaluacionCorteMap = useMemo(() => {
+    const map = {};
+    productos.forEach((p) => {
+      if (p.estado === "activo") {
+        map[p.id] = evaluarCicloCorteTarjeta(p, extractos);
+      }
+    });
+    return map;
+  }, [productos, extractos]);
+
+  // Tarjetas cuyo corte ya pasó y están fuera de plazo (URGENTES)
+  const tarjetasVencidas = useMemo(() => {
+    return productos.filter((p) => {
+      if (p.estado !== "activo") return false;
+      const ev = evaluacionCorteMap[p.id];
+      return ev && ev.estado === "urgente";
+    });
+  }, [productos, evaluacionCorteMap]);
+
+  // Tarjetas cuyo corte ya pasó y están dentro de los 5 días de plazo
+  const tarjetasEnPlazo = useMemo(() => {
+    return productos.filter((p) => {
+      if (p.estado !== "activo") return false;
+      const ev = evaluacionCorteMap[p.id];
+      return ev && ev.estado === "en_plazo";
+    });
+  }, [productos, evaluacionCorteMap]);
+
+  // Tarjetas cuyo próximo corte está en el futuro
+  const tarjetasProximas = useMemo(() => {
+    return productos.filter((p) => {
+      if (p.estado !== "activo") return false;
+      const ev = evaluacionCorteMap[p.id];
+      return ev && ev.estado === "proximo";
+    });
+  }, [productos, evaluacionCorteMap]);
+
+  const calcularPlazoMesEspecifico = useCallback((p, per) => {
+    if (!p || !per) return null;
+    const [y, m] = per.split("-").map(Number);
+    const dia = getDiaCorteEfectivo(p, y, m - 1);
+    if (!dia) return null;
+    const cutoff = new Date(y, m - 1, dia);
+    cutoff.setHours(0, 0, 0, 0);
+    const deadline = new Date(cutoff);
+    deadline.setDate(deadline.getDate() + 5);
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    let estado = "proximo";
+    let diasDiferencia = 0;
+    let mensaje = "";
+    const cutoffFmt = fmtDateShort(cutoff);
+
+    if (hoy > deadline) {
+      estado = "urgente";
+      diasDiferencia = Math.floor((hoy - deadline) / 86400000);
+      mensaje = `Cortó el ${cutoffFmt} · Plazo vencido hace ${diasDiferencia} día${diasDiferencia === 1 ? "" : "s"}`;
+    } else if (hoy >= cutoff && hoy <= deadline) {
+      estado = "en_plazo";
+      diasDiferencia = Math.max(0, Math.ceil((deadline - hoy) / 86400000));
+      mensaje = `Cortó el ${cutoffFmt} · En plazo (${diasDiferencia} día${diasDiferencia === 1 ? "" : "s"} restante${diasDiferencia === 1 ? "" : "s"})`;
+    } else {
+      estado = "proximo";
+      diasDiferencia = Math.ceil((cutoff - hoy) / 86400000);
+      mensaje = `Próximo corte: ${cutoffFmt} (en ${diasDiferencia} día${diasDiferencia === 1 ? "" : "s"})`;
+    }
+
+    return { cutoff, deadline, estado, mensaje, diasDiferencia, periodoEsperado: per };
+  }, []);
+
+  const calcularPlazo = useCallback((p) => {
+    if (modoRegistro === "por_mes") {
+      return calcularPlazoMesEspecifico(p, periodoRegistro);
+    }
+    return evaluacionCorteMap[p.id] || null;
+  }, [modoRegistro, periodoRegistro, evaluacionCorteMap, calcularPlazoMesEspecifico]);
+
+  const productosConExtractoRegistro = useMemo(() => {
+    return new Set(
+      extractos.filter((e) => e.periodo === periodoRegistro).map((e) => e.producto_id)
+    );
+  }, [extractos, periodoRegistro]);
+
+  const pendientesRegistroTotal = useMemo(() => {
+    return productos.filter((p) => {
+      if (p.estado !== "activo" || !matchBusquedaProducto(p)) return false;
+      if (modoRegistro === "por_mes") {
+        return !productosConExtractoRegistro.has(p.id);
+      }
+      return true;
+    });
+  }, [productos, matchBusquedaProducto, modoRegistro, productosConExtractoRegistro]);
+
+  const pendientesRegistro = useMemo(() => {
+    return pendientesRegistroTotal.filter((p) => {
+      if (filtroPlazo === "todos") return true;
+      const plazo = calcularPlazo(p);
+      if (!plazo) return false;
+      if (filtroPlazo === "para_registrar") return plazo.estado === "urgente" || plazo.estado === "en_plazo";
+      return plazo.estado === "proximo";
+    });
+  }, [pendientesRegistroTotal, filtroPlazo, calcularPlazo]);
+
   const pendientesPago = extractos.filter((e) =>
     e.estado === "pendiente_pago" && (periodoFiltro === "todos" || e.periodo === periodoFiltro) && matchBusqueda(e)
   );
@@ -184,13 +254,24 @@ export default function Extractos() {
   };
   const sortedPendientes = useMemo(() => {
     return [...pendientesRegistro].sort((a, b) => {
-      if (!sortBy) return 0;
-      const va = getSortValue(a), vb = getSortValue(b);
-      if (va < vb) return sortDir === "asc" ? -1 : 1;
-      if (va > vb) return sortDir === "asc" ? 1 : -1;
-      return 0;
+      if (sortBy) {
+        const va = getSortValue(a), vb = getSortValue(b);
+        if (va < vb) return sortDir === "asc" ? -1 : 1;
+        if (va > vb) return sortDir === "asc" ? 1 : -1;
+        return 0;
+      }
+      // Orden por urgencia: urgentes primero (corte cumplido sin extracto), luego en_plazo, luego próximos
+      const pza = calcularPlazo(a);
+      const pzb = calcularPlazo(b);
+      const scoreEst = (st) => (st === "urgente" ? 0 : st === "en_plazo" ? 1 : 2);
+      const sa = scoreEst(pza?.estado);
+      const sb = scoreEst(pzb?.estado);
+      if (sa !== sb) return sa - sb;
+      const ca = pza?.cutoff?.getTime() || 0;
+      const cb = pzb?.cutoff?.getTime() || 0;
+      return ca - cb;
     });
-  }, [pendientesRegistro, sortBy, sortDir, titularMap]);
+  }, [pendientesRegistro, sortBy, sortDir, titularMap, calcularPlazo]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -446,6 +527,43 @@ export default function Extractos() {
 
   return (
     <div className="p-6 space-y-4">
+      {/* Banner de alerta de tarjetas cuyo corte ya ocurrió y están fuera de plazo */}
+      {tarjetasVencidas.length > 0 && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3.5 text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-destructive mt-0.5 shrink-0" />
+            <div>
+              <div className="font-semibold text-destructive flex items-center gap-2 flex-wrap">
+                <span>Alerta: {tarjetasVencidas.length} tarjeta(s) cortaron y no tienen extracto registrado</span>
+                <Badge variant="destructive" className="text-[10px] uppercase font-bold tracking-wider">Cortes Vencidos</Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {tarjetasVencidas.length <= 4
+                  ? tarjetasVencidas.map((p) => {
+                      const ev = evaluacionCorteMap[p.id];
+                      return `${p.nombre} (${ev?.mensaje || "corte cumplido"})`;
+                    }).join(" · ")
+                  : `${tarjetasVencidas.slice(0, 3).map((p) => p.nombre).join(", ")} y ${tarjetasVencidas.length - 3} tarjetas más cortaron y superaron los 5 días de plazo.`
+                }
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="destructive"
+            className="shrink-0 text-xs h-8 font-medium gap-1"
+            onClick={() => {
+              setTab("pendiente_registro");
+              setModoRegistro("pendientes_corte");
+              setFiltroPlazo("para_registrar");
+            }}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            Ver tarjetas vencidas ({tarjetasVencidas.length})
+          </Button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div className="flex gap-2 items-center">
           <Select value={periodoFiltro} onValueChange={setPeriodoFiltro}>
@@ -455,8 +573,18 @@ export default function Extractos() {
               {periodos.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button variant={tab === "pendiente_registro" ? "default" : "outline"} size="sm" onClick={() => setTab("pendiente_registro")}>
-            <Clock className="w-4 h-4 mr-1" /> Por Registrar ({pendientesRegistroTotal.length})
+          <Button
+            variant={tab === "pendiente_registro" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setTab("pendiente_registro")}
+            className="relative"
+          >
+            <Clock className="w-4 h-4 mr-1" /> Por Registrar ({modoRegistro === "pendientes_corte" ? tarjetasVencidas.length + tarjetasEnPlazo.length : pendientesRegistroTotal.length})
+            {tarjetasVencidas.length > 0 && (
+              <Badge variant="destructive" className="ml-1.5 px-1.5 py-0 text-[10px] font-bold">
+                {tarjetasVencidas.length} urgentes
+              </Badge>
+            )}
           </Button>
           <Button variant={tab === "pendiente_pago" ? "default" : "outline"} size="sm" onClick={() => setTab("pendiente_pago")}>
             <DollarSign className="w-4 h-4 mr-1" /> Por Pagar ({pendientesPago.length})
@@ -536,49 +664,90 @@ export default function Extractos() {
       {tab === "pendiente_registro" && (
         <Card>
           <CardContent className="pt-6">
-            <div className="flex flex-wrap items-center gap-2 mb-3">
-              <h3 className="font-heading font-semibold">Productos pendientes de registrar extracto</h3>
-              <div className="ml-auto flex items-center gap-1.5">
-                <Button size="sm" variant="outline" onClick={() => setPeriodoRegistro(shiftMonth(periodoRegistro, -1))}>
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-                <input
-                  type="month"
-                  value={periodoRegistro}
-                  onChange={(e) => setPeriodoRegistro(e.target.value)}
-                  className="h-8 rounded-md border border-input bg-transparent px-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                />
-                <Button size="sm" variant="outline" onClick={() => setPeriodoRegistro(shiftMonth(periodoRegistro, 1))}>
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setPeriodoRegistro(new Date().toISOString().substring(0, 7))}>
-                  Hoy
-                </Button>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div>
+                <h3 className="font-heading font-semibold text-base">Control de Registro de Extractos</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {modoRegistro === "pendientes_corte"
+                    ? "Control por ciclo real de facturación: detecta y avisa automáticamente de tarjetas que ya cortaron (mes anterior o actual) y están pendientes de extracto."
+                    : `Control por mes de facturación seleccionado (${periodoRegistro}).`}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
+                  <Button
+                    size="sm"
+                    variant={modoRegistro === "pendientes_corte" ? "default" : "ghost"}
+                    className="h-7 text-xs px-2.5 font-medium"
+                    onClick={() => setModoRegistro("pendientes_corte")}
+                  >
+                    <Clock className="w-3.5 h-3.5 mr-1" />
+                    Cortes Pendientes ({tarjetasVencidas.length + tarjetasEnPlazo.length})
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={modoRegistro === "por_mes" ? "default" : "ghost"}
+                    className="h-7 text-xs px-2.5 font-medium"
+                    onClick={() => setModoRegistro("por_mes")}
+                  >
+                    <Calendar className="w-3.5 h-3.5 mr-1" />
+                    Por Mes ({periodoRegistro})
+                  </Button>
+                </div>
+
+                {modoRegistro === "por_mes" && (
+                  <div className="flex items-center gap-1.5">
+                    <Button size="sm" variant="outline" onClick={() => setPeriodoRegistro(shiftMonth(periodoRegistro, -1))}>
+                      <ChevronLeft className="w-4 h-4" />
+                    </Button>
+                    <input
+                      type="month"
+                      value={periodoRegistro}
+                      onChange={(e) => setPeriodoRegistro(e.target.value)}
+                      className="h-8 rounded-md border border-input bg-transparent px-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                    <Button size="sm" variant="outline" onClick={() => setPeriodoRegistro(shiftMonth(periodoRegistro, 1))}>
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setPeriodoRegistro(new Date().toISOString().substring(0, 7))}>
+                      Hoy
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
+
             <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm flex gap-2 mb-3">
               <CalendarClock className="w-4 h-4 text-warning mt-0.5 shrink-0" />
               <div>
-                <span className="font-semibold">Plazo de registro:</span> el extracto debe ingresarse entre la fecha de corte de la tarjeta y hasta <b>5 días después</b>. Pasada esa fecha, el registro se considera <b>urgente</b>.
+                <span className="font-semibold">Plazo de registro:</span> el extracto debe ingresarse entre la fecha de corte de la tarjeta y hasta <b>5 días después</b>. Pasada esa fecha, el registro se considera <b>urgente / vencido</b>.
               </div>
             </div>
-            <div className="flex items-center gap-1.5 mb-3">
+
+            <div className="flex items-center gap-1.5 mb-3 flex-wrap">
               <span className="text-xs text-muted-foreground mr-1">Filtrar por plazo:</span>
-              <Button size="sm" variant={filtroPlazo === "todos" ? "default" : "outline"} onClick={() => setFiltroPlazo("todos")}>Todos</Button>
               <Button size="sm" variant={filtroPlazo === "para_registrar" ? "default" : "outline"} onClick={() => setFiltroPlazo("para_registrar")}>
-                <Clock className="w-3.5 h-3.5 mr-1" /> Para registrar
+                <Clock className="w-3.5 h-3.5 mr-1" /> Para registrar ({pendientesRegistroTotal.filter(p => { const pl = calcularPlazo(p); return pl?.estado === "urgente" || pl?.estado === "en_plazo"; }).length})
               </Button>
               <Button size="sm" variant={filtroPlazo === "proximo" ? "default" : "outline"} onClick={() => setFiltroPlazo("proximo")}>
-                <CalendarClock className="w-3.5 h-3.5 mr-1" /> Próximos
+                <CalendarClock className="w-3.5 h-3.5 mr-1" /> Próximos cortes ({pendientesRegistroTotal.filter(p => { const pl = calcularPlazo(p); return pl?.estado === "proximo"; }).length})
+              </Button>
+              <Button size="sm" variant={filtroPlazo === "todos" ? "default" : "outline"} onClick={() => setFiltroPlazo("todos")}>
+                Todos ({pendientesRegistroTotal.length})
               </Button>
             </div>
+
             <p className="text-xs text-muted-foreground mb-3">
-              {pendientesRegistro.length === 0
+              {modoRegistro === "pendientes_corte"
+                ? `${sortedPendientes.length} producto(s) en vista de cortes pendientes.`
+                : pendientesRegistro.length === 0
                 ? `Todos los productos activos tienen extracto registrado para ${periodoRegistro}.`
                 : `${pendientesRegistro.length} producto(s) activo(s) sin extracto para el período ${periodoRegistro}.`}
             </p>
-            {pendientesRegistro.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No hay productos pendientes para este período.</p>
+
+            {sortedPendientes.length === 0 ? (
+              <p className="text-muted-foreground text-sm">No hay productos pendientes para el filtro seleccionado.</p>
             ) : (
               <>
                 <table className="w-full text-sm thead-sticky">
@@ -591,7 +760,7 @@ export default function Extractos() {
                         { key: "banco", label: "Banco" },
                         { key: "saldo", label: "Saldo" },
                         { key: "corte", label: "Corte" },
-                        { key: "plazo", label: "Plazo" },
+                        { key: "plazo", label: "Plazo / Estado" },
                       ].map((h) => (
                         <th key={h.key} className="py-2 font-medium">
                           <button
@@ -612,40 +781,62 @@ export default function Extractos() {
                     </tr>
                   </thead>
                   <tbody>
-                    {paginatedPendientes.map((p) => (
-                      <tr key={p.id} className="border-b border-border/50">
-                        <td className="py-2 font-medium">{p.nombre}</td>
-                        <td className="py-2 text-xs text-muted-foreground">{titularMap[p.titular_id]?.nombre || "—"}</td>
-                        <td className="py-2 text-xs">{TIPO_PRODUCTO[p.tipo] || p.tipo}</td>
-                        <td className="py-2 text-xs">{BANCO_NAMES[p.banco] || p.banco}</td>
-                        <td className="py-2 font-mono">{formatCOP(p.saldo)}</td>
-                        <td className="py-2 text-xs">Día {p.fecha_corte}</td>
-                        <td className="py-2 text-xs">
-                          {(() => {
-                            const plazo = calcularPlazo(p);
-                            if (!plazo) return "—";
-                            return (
-                              <div className="space-y-1">
-                                <div className="font-mono">{fmtDateShort(plazo.cutoff)} — {fmtDateShort(plazo.deadline)}</div>
-                                {plazo.estado === "urgente" && <Badge variant="destructive">Urgente</Badge>}
-                                {plazo.estado === "en_plazo" && <Badge className="bg-warning text-warning-foreground">En plazo</Badge>}
-                                {plazo.estado === "proximo" && <Badge variant="secondary">Próximo</Badge>}
-                              </div>
-                            );
-                          })()}
-                        </td>
-                        <td className="py-2 text-right">
-                          <div className="flex gap-1 justify-end">
-                            <Button size="sm" variant="outline" onClick={() => setPdfModal(true)}>
-                              <FileUp className="w-3.5 h-3.5 mr-1" /> Cargar PDF
-                            </Button>
-                            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setSaltarTarget(p)} title="Saltar este período (tarjeta cancelada o extracto no disponible)">
-                              Saltar
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {paginatedPendientes.map((p) => {
+                      const plazo = calcularPlazo(p);
+                      return (
+                        <tr key={p.id} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                          <td className="py-2 font-medium">
+                            <div className="flex items-center gap-1.5">
+                              {plazo?.estado === "urgente" && (
+                                <AlertTriangle className="w-3.5 h-3.5 text-destructive shrink-0" title="Corte vencido sin extracto" />
+                              )}
+                              <span>{p.nombre}</span>
+                            </div>
+                            {p.numero_completo && (
+                              <div className="text-[11px] text-muted-foreground font-mono">{p.numero_completo}</div>
+                            )}
+                          </td>
+                          <td className="py-2 text-xs text-muted-foreground">{titularMap[p.titular_id]?.nombre || "—"}</td>
+                          <td className="py-2 text-xs">{TIPO_PRODUCTO[p.tipo] || p.tipo}</td>
+                          <td className="py-2 text-xs">{BANCO_NAMES[p.banco] || p.banco}</td>
+                          <td className="py-2 font-mono">{formatCOP(p.saldo)}</td>
+                          <td className="py-2 text-xs font-medium">{getCorteDisplayText(p)}</td>
+                          <td className="py-2 text-xs">
+                            {(() => {
+                              if (!plazo) return "—";
+                              return (
+                                <div className="space-y-1">
+                                  <div className="font-mono text-xs flex items-center gap-1.5 flex-wrap">
+                                    <span>{fmtDateShort(plazo.cutoff)} — {fmtDateShort(plazo.deadline)}</span>
+                                    {plazo.estado === "urgente" && <Badge variant="destructive" className="text-[10px]">Urgente</Badge>}
+                                    {plazo.estado === "en_plazo" && <Badge className="bg-warning text-warning-foreground text-[10px]">En plazo</Badge>}
+                                    {plazo.estado === "proximo" && <Badge variant="secondary" className="text-[10px]">Próximo</Badge>}
+                                  </div>
+                                  <div className={cn("text-[11px]", plazo.estado === "urgente" ? "text-destructive font-medium" : plazo.estado === "en_plazo" ? "text-amber-600 dark:text-amber-400 font-medium" : "text-muted-foreground")}>
+                                    {plazo.mensaje}
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </td>
+                          <td className="py-2 text-right">
+                            <div className="flex gap-1 justify-end">
+                              <Button
+                                size="sm"
+                                variant={plazo?.estado === "urgente" ? "default" : "outline"}
+                                className={cn("text-xs h-8", plazo?.estado === "urgente" && "bg-destructive text-destructive-foreground hover:bg-destructive/90")}
+                                onClick={() => setPdfModalTarget({ open: true, productoId: p.id, periodo: plazo?.periodoEsperado || "" })}
+                              >
+                                <FileUp className="w-3.5 h-3.5 mr-1" /> Cargar PDF
+                              </Button>
+                              <Button size="sm" variant="ghost" className="text-muted-foreground text-xs h-8" onClick={() => setSaltarTarget(p)} title="Saltar este período (tarjeta cancelada o extracto no disponible)">
+                                Saltar
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
 
@@ -777,10 +968,16 @@ export default function Extractos() {
       />
 
       <PdfUploadDialog
-        open={pdfModal}
-        onOpenChange={setPdfModal}
+        open={pdfModal || pdfModalTarget.open}
+        onOpenChange={(v) => {
+          setPdfModal(v);
+          if (!v) setPdfModalTarget({ open: false, productoId: "", periodo: "" });
+        }}
+        productoInicial={pdfModalTarget.productoId}
+        periodoInicial={pdfModalTarget.periodo}
         onConfirmado={(data) => {
           loadData();
+          setPdfModalTarget({ open: false, productoId: "", periodo: "" });
           if (data?.extracto_id) {
             setTimeout(() => {
               const ok = window.confirm(
