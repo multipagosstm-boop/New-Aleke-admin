@@ -30,6 +30,7 @@ import MetasTarjetas from "@/pages/admin/MetasTarjetas";
 import Clientes from "@/pages/admin/Clientes";
 import AlekeRooftop from "@/pages/admin/AlekeRooftop";
 import Pakredito from "@/pages/admin/Pakredito";
+import Emprendamos from "@/pages/admin/Emprendamos";
 import Conciliacion from "@/pages/admin/Conciliacion";
 import Asistente from "@/pages/admin/Asistente";
 import AuditoriaCuadre from "@/pages/admin/AuditoriaCuadre";
@@ -162,6 +163,7 @@ const AuthenticatedApp = () => {
             {/* Líneas de Negocio (Todos los roles) */}
             <Route path="/admin/lineas/rooftop" element={<AlekeRooftop />} />
             <Route path="/admin/lineas/pakredito" element={<Pakredito />} />
+            <Route path="/admin/lineas/emprendamos" element={<Emprendamos />} />
           </Route>
         </Route>
         <Route path="*" element={<PageNotFound />} />

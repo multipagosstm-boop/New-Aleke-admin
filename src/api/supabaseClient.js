@@ -1,4 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
+import {
+  EMPRENDAMOS_CLIENTES_SEED,
+  EMPRENDAMOS_CREDITOS_SEED,
+  EMPRENDAMOS_ABONOS_SEED,
+  EMPRENDAMOS_INTERESES_SEED
+} from '@/lib/emprendamosSeedData';
 
 // Configuration keys in localStorage
 const STORAGE_URL_KEY = 'aleke_supabase_url';
@@ -109,10 +115,129 @@ export function getSupabase() {
   }
 }
 
+// In-memory fallback cache when Supabase is not yet configured or for offline prototyping
+const memoryStore = new Map();
+
+const LOCAL_STORAGE_TABLE_SEEDS = {
+  emprendamos_cliente: EMPRENDAMOS_CLIENTES_SEED,
+  emprendamos_credito: EMPRENDAMOS_CREDITOS_SEED,
+  emprendamos_abono: EMPRENDAMOS_ABONOS_SEED,
+  emprendamos_interes: EMPRENDAMOS_INTERESES_SEED
+};
+
+export const LOCAL_MANAGED_TABLES = new Set([
+  'emprendamos_cliente',
+  'emprendamos_credito',
+  'emprendamos_abono',
+  'emprendamos_interes'
+]);
+
+const initializedLocalTables = new Set();
+
+function initLocalTable(table) {
+  if (initializedLocalTables.has(table)) return;
+  initializedLocalTables.add(table);
+
+  if (!memoryStore.has(table)) {
+    memoryStore.set(table, new Map());
+  }
+  const coll = memoryStore.get(table);
+
+  const seed = LOCAL_STORAGE_TABLE_SEEDS[table] || [];
+  let stored = null;
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(`aleke_local_${table}`);
+      if (raw) stored = JSON.parse(raw);
+    } catch {}
+  }
+
+  // Load seed records first so all clients, credits, and initial records are available
+  seed.forEach((item) => {
+    if (item && item.id) coll.set(String(item.id), { ...item });
+  });
+
+  // Layer stored records from localStorage on top so user modifications are preserved
+  if (Array.isArray(stored)) {
+    stored.forEach((item) => {
+      if (item && item.id) coll.set(String(item.id), { ...item });
+    });
+  }
+}
+
+function saveLocalTable(table) {
+  if (typeof window !== 'undefined' && LOCAL_MANAGED_TABLES.has(table)) {
+    try {
+      const coll = getMemoryCollection(table);
+      const arr = Array.from(coll.values());
+      localStorage.setItem(`aleke_local_${table}`, JSON.stringify(arr));
+    } catch {}
+  }
+}
+
+function getMemoryCollection(table) {
+  if (LOCAL_MANAGED_TABLES.has(table)) {
+    initLocalTable(table);
+  }
+  if (!memoryStore.has(table)) {
+    memoryStore.set(table, new Map());
+  }
+  return memoryStore.get(table);
+}
+
 // Direct supabase client export with graceful query proxy fallback
 export const supabase = new Proxy({}, {
   get(target, prop) {
     const client = getSupabase();
+    if (prop === 'from') {
+      return (table) => {
+        if (LOCAL_MANAGED_TABLES.has(table)) {
+          return {
+            select: () => ({
+              order: () => ({
+                limit: () => Promise.resolve({ data: Array.from(getMemoryCollection(table).values()), error: null }),
+                range: () => Promise.resolve({ data: Array.from(getMemoryCollection(table).values()), error: null }),
+                then: (res) => Promise.resolve(res({ data: Array.from(getMemoryCollection(table).values()), error: null }))
+              }),
+              limit: () => Promise.resolve({ data: Array.from(getMemoryCollection(table).values()), error: null }),
+              eq: (f, v) => ({
+                single: () => Promise.resolve({ data: Array.from(getMemoryCollection(table).values()).find(x => String(x[f]) === String(v)) || null, error: null }),
+                maybeSingle: () => Promise.resolve({ data: Array.from(getMemoryCollection(table).values()).find(x => String(x[f]) === String(v)) || null, error: null }),
+                then: (res) => Promise.resolve(res({ data: Array.from(getMemoryCollection(table).values()).filter(x => String(x[f]) === String(v)), error: null }))
+              }),
+              then: (res) => Promise.resolve(res({ data: Array.from(getMemoryCollection(table).values()), error: null }))
+            }),
+            insert: (itms) => ({
+              select: () => ({
+                single: () => Promise.resolve({ data: Array.isArray(itms) ? itms[0] : itms, error: null })
+              }),
+              then: (res) => Promise.resolve(res({ data: Array.isArray(itms) ? itms : [itms], error: null }))
+            }),
+            update: () => ({
+              eq: () => ({
+                select: () => ({
+                  single: () => Promise.resolve({ data: {}, error: null })
+                }),
+                then: (res) => Promise.resolve(res({ data: [], error: null }))
+              })
+            }),
+            delete: () => ({
+              eq: () => Promise.resolve({ error: null }),
+              then: (res) => Promise.resolve(res({ error: null }))
+            })
+          };
+        }
+        if (client && typeof client.from === 'function') {
+          return client.from(table);
+        }
+        return {
+          select: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }), limit: () => Promise.resolve({ data: [], error: null }) }),
+          insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: {}, error: null }) }) }),
+          update: () => ({ eq: () => ({ select: () => ({ single: () => Promise.resolve({ data: {}, error: null }) }) }) }),
+          delete: () => ({ eq: () => Promise.resolve({ error: null }) })
+        };
+      };
+    }
     if (client && prop in client) {
       const val = client[prop];
       return typeof val === 'function' ? val.bind(client) : val;
@@ -127,16 +252,6 @@ export const supabase = new Proxy({}, {
     });
   }
 });
-
-// In-memory fallback cache when Supabase is not yet configured or for offline prototyping
-const memoryStore = new Map();
-
-function getMemoryCollection(table) {
-  if (!memoryStore.has(table)) {
-    memoryStore.set(table, new Map());
-  }
-  return memoryStore.get(table);
-}
 
 function deduplicateById(items) {
   if (!Array.isArray(items)) return [];
@@ -328,6 +443,145 @@ export async function recordAuditLog({
 export function createEntityRepository(entityName) {
   const table = entityToTable(entityName);
 
+  if (LOCAL_MANAGED_TABLES.has(table)) {
+    const sortItems = (items, sort) => {
+      if (!sort) return items;
+      const isDesc = sort.startsWith('-');
+      const col = isDesc ? sort.slice(1) : sort;
+      return [...items].sort((a, b) => {
+        const valA = a[col] ?? '';
+        const valB = b[col] ?? '';
+        if (valA < valB) return isDesc ? 1 : -1;
+        if (valA > valB) return isDesc ? -1 : 1;
+        return 0;
+      });
+    };
+
+    const filterItems = (items, criteria = {}) => {
+      return items.filter(item => {
+        return Object.entries(criteria || {}).every(([k, v]) => {
+          if (v === undefined || v === null) return true;
+          if (typeof v === 'object' && !Array.isArray(v)) {
+            if (v.$in && Array.isArray(v.$in)) return v.$in.map(String).includes(String(item[k]));
+            if (v.$gte !== undefined) return item[k] >= v.$gte;
+            if (v.$lte !== undefined) return item[k] <= v.$lte;
+            if (v.$gt !== undefined) return item[k] > v.$gt;
+            if (v.$lt !== undefined) return item[k] < v.$lt;
+            if (v.$neq !== undefined) return String(item[k]) !== String(v.$neq);
+          }
+          return String(item[k]) === String(v);
+        });
+      });
+    };
+
+    return {
+      async list(sort = null, limit = 50000) {
+        const all = Array.from(getMemoryCollection(table).values());
+        const sorted = sortItems(all, sort);
+        return sorted.slice(0, limit ? Number(limit) : 50000);
+      },
+      async filter(criteria = {}, sort = null, limit = 50000) {
+        const all = Array.from(getMemoryCollection(table).values());
+        const filtered = filterItems(all, criteria);
+        const sorted = sortItems(filtered, sort);
+        return sorted.slice(0, limit ? Number(limit) : 50000);
+      },
+      async get(id) {
+        if (!id) return null;
+        return getMemoryCollection(table).get(String(id)) || null;
+      },
+      async create(item) {
+        const id = item.id || `gen_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const now = new Date().toISOString();
+        const fullItem = {
+          ...item,
+          id: String(id),
+          created_date: item.created_date || now,
+          updated_date: now,
+          is_sample: item.is_sample ?? false
+        };
+        getMemoryCollection(table).set(String(id), fullItem);
+        saveLocalTable(table);
+        recordAuditLog({
+          table,
+          record_id: id,
+          action: item?.accion || item?.action || 'create',
+          action_type: 'create',
+          payload: fullItem
+        });
+        return fullItem;
+      },
+      async update(id, rawPayload) {
+        const existing = getMemoryCollection(table).get(String(id)) || { id: String(id) };
+        const now = new Date().toISOString();
+        const updated = {
+          ...existing,
+          ...rawPayload,
+          id: String(id),
+          updated_date: now
+        };
+        getMemoryCollection(table).set(String(id), updated);
+        saveLocalTable(table);
+        recordAuditLog({
+          table,
+          record_id: id,
+          action: rawPayload?.accion || rawPayload?.action || 'update',
+          action_type: 'update',
+          payload: updated
+        });
+        return updated;
+      },
+      async delete(id) {
+        getMemoryCollection(table).delete(String(id));
+        saveLocalTable(table);
+        recordAuditLog({ table, record_id: id, action: 'delete', action_type: 'delete', payload: null });
+        return { success: true };
+      },
+      async deleteMany(criteria = {}) {
+        const coll = getMemoryCollection(table);
+        if (criteria?.id && typeof criteria.id === 'object' && criteria.id.$in) {
+          criteria.id.$in.forEach(id => coll.delete(String(id)));
+        } else if (criteria) {
+          for (const [id, item] of coll.entries()) {
+            const match = Object.entries(criteria).every(([k, v]) => String(item[k]) === String(v));
+            if (match) coll.delete(id);
+          }
+        }
+        saveLocalTable(table);
+        return { success: true };
+      },
+      async bulkCreate(items = []) {
+        const now = new Date().toISOString();
+        const prepared = items.map((item, idx) => ({
+          ...item,
+          id: String(item.id || `gen_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`),
+          created_date: item.created_date || now,
+          updated_date: now
+        }));
+        prepared.forEach(d => getMemoryCollection(table).set(d.id, d));
+        saveLocalTable(table);
+        return prepared;
+      },
+      async bulkUpdate(items = []) {
+        const coll = getMemoryCollection(table);
+        items.forEach(d => {
+          if (d.id) {
+            const existing = coll.get(String(d.id)) || {};
+            coll.set(String(d.id), { ...existing, ...d });
+          }
+        });
+        saveLocalTable(table);
+        return items;
+      },
+      async bulkDelete(ids = []) {
+        const coll = getMemoryCollection(table);
+        ids.forEach(id => coll.delete(String(id)));
+        saveLocalTable(table);
+        return { success: true };
+      }
+    };
+  }
+
   return {
     async list(sort = null, limit = 50000) {
       const client = getSupabase();
@@ -351,7 +605,9 @@ export function createEntityRepository(entityName) {
           const { data, error } = await query;
           if (error) {
             handleRlsViolation(table, 'list', error);
-            console.warn(`Supabase list error for ${table}:`, error.message);
+            if (!error.message?.includes('schema cache')) {
+              console.warn(`Supabase list error for ${table}:`, error.message);
+            }
           } else if (Array.isArray(data)) {
             dbData = data;
           }
@@ -370,7 +626,9 @@ export function createEntityRepository(entityName) {
             const { data, error } = await query;
             if (error) {
               handleRlsViolation(table, 'list', error);
-              console.warn(`Supabase list error for ${table}:`, error.message);
+              if (!error.message?.includes('schema cache')) {
+                console.warn(`Supabase list error for ${table}:`, error.message);
+              }
               break;
             }
             if (!data || data.length === 0) break;
@@ -423,7 +681,9 @@ export function createEntityRepository(entityName) {
           query = query.limit(targetLimit);
           const { data, error } = await query;
           if (error) {
-            console.warn(`Supabase filter error for ${table}:`, error.message);
+            if (!error.message?.includes('schema cache')) {
+              console.warn(`Supabase filter error for ${table}:`, error.message);
+            }
           } else if (Array.isArray(data)) {
             dbData = data;
           }
@@ -437,7 +697,9 @@ export function createEntityRepository(entityName) {
             query = query.range(from, to);
             const { data, error } = await query;
             if (error) {
-              console.warn(`Supabase filter error for ${table}:`, error.message);
+              if (!error.message?.includes('schema cache')) {
+                console.warn(`Supabase filter error for ${table}:`, error.message);
+              }
               break;
             }
             if (!data || data.length === 0) break;

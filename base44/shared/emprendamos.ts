@@ -417,16 +417,18 @@ export async function generarInteresesMensuales(base44, user, params) {
     const yaGen = await base44.asServiceRole.entities.EmprendamosInteres.filter({ credito_id: c.id, periodo: per, estado: "generado" });
     if (yaGen.length > 0) continue;
 
-    const intereses = Math.round((c.saldo_capital || 0) * (c.tasa_nominal || 0));
+    const rawTasa = Number(c.tasa_nominal) || 0;
+    const tasa = rawTasa > 1 ? rawTasa / 100 : rawTasa;
+    const intereses = Math.round(Number(c.saldo_capital || 0) * tasa);
     if (intereses <= 0) continue;
 
     const interes = await base44.asServiceRole.entities.EmprendamosInteres.create({
       emprendamos_cliente_id, cliente_id: inscrito.cliente_id, credito_id: c.id, periodo: per,
-      capital_base: c.saldo_capital, tasa: c.tasa_nominal, intereses, comprobante_id: "", estado: "generado", fecha: f
+      capital_base: Math.round(Number(c.saldo_capital || 0)), tasa, intereses: Math.round(intereses), comprobante_id: "", estado: "generado", fecha: f
     });
 
     await base44.asServiceRole.entities.EmprendamosCredito.update(c.id, {
-      saldo_intereses: (c.saldo_intereses || 0) + intereses
+      saldo_intereses: Math.round((Number(c.saldo_intereses) || 0) + intereses)
     });
 
     generados.push({ credito_id: c.id, codigo: c.codigo, capital_base: c.saldo_capital, intereses, interes_id: interes.id });

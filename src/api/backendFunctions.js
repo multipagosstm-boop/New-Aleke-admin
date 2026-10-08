@@ -4596,3 +4596,930 @@ export async function procesarExtractoPDF(entities, payload = {}) {
 
   return { success: true };
 }
+
+// ============================================================================
+// LÍNEA DE NEGOCIO: EMPRENDAMOS
+// ============================================================================
+
+export async function ensureSubcuentasEmprendamos(entities) {
+  const defs = [
+    { codigo: 120502, concepto: "Cartera Emprendamos", naturaleza: "Débito", tipo_estado: "Balance", clase: 1, grupo: 12, cuenta: 1205, subcuenta: 120502 },
+    { codigo: 410509, concepto: "Intereses Emprendamos", naturaleza: "Crédito", tipo_estado: "Resultado", clase: 4, grupo: 41, cuenta: 4105, subcuenta: 410509 },
+    { codigo: 410510, concepto: "Comisiones Emprendamos", naturaleza: "Crédito", tipo_estado: "Resultado", clase: 4, grupo: 41, cuenta: 4105, subcuenta: 410510 }
+  ];
+
+  for (const d of defs) {
+    try {
+      const exist = await entities.Cuenta.filter({ codigo: d.codigo });
+      if (exist && exist.length > 0) {
+        if (!exist[0].es_transaccional) {
+          await entities.Cuenta.update(exist[0].id, { es_transaccional: true });
+        }
+        continue;
+      }
+      await entities.Cuenta.create({
+        codigo: d.codigo,
+        nivel: "Subcuenta",
+        clase: d.clase,
+        clase_nombre: d.clase === 1 ? "Activo" : "Ingreso",
+        grupo: d.grupo,
+        cuenta: d.cuenta,
+        subcuenta: d.subcuenta,
+        concepto: d.concepto,
+        naturaleza: d.naturaleza,
+        tipo_estado: d.tipo_estado,
+        es_transaccional: true
+      });
+    } catch (err) {
+      console.warn(`[ensureSubcuentasEmprendamos] Cuenta ${d.codigo}:`, err?.message || err);
+    }
+  }
+}
+
+function sumarMesesISO(fechaStr, n) {
+  const d = new Date(fechaStr + "T00:00:00");
+  d.setMonth(d.getMonth() + n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function calcularProximoPagoEmprendamos(diaPago, desde) {
+  const base = desde ? new Date(desde + "T00:00:00") : new Date();
+  const year = base.getFullYear();
+  const month = base.getMonth();
+  const dia = Math.min(28, Math.max(1, Number(diaPago) || 15));
+
+  let tentativa = new Date(year, month, dia);
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  if (tentativa <= hoy) {
+    tentativa = new Date(year, month + 1, dia);
+  }
+
+  const y = tentativa.getFullYear();
+  const m = String(tentativa.getMonth() + 1).padStart(2, "0");
+  const d = String(tentativa.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+async function generarCodigoCreditoEmprendamos(entities) {
+  const existentes = await entities.EmprendamosCredito.list("-created_date", 1000).catch(() => []);
+  const maxNum = (existentes || []).reduce((max, c) => {
+    const match = (c.codigo || "").match(/EM-(\d+)/i);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      return n > max ? n : max;
+    }
+    return max;
+  }, 0);
+  return "EM-" + String(maxNum + 1).padStart(3, "0");
+}
+
+export async function gestionarEmprendamos(entities, payload = {}) {
+  const accion = payload.accion || payload.action;
+  const hoy = new Date().toISOString().substring(0, 10);
+
+  // Asegurar siempre las cuentas transaccionales de Emprendamos
+  await ensureSubcuentasEmprendamos(entities);
+
+  // 1. INSCRIBIR CLIENTE (Sencillo o con Productos)
+  if (accion === "inscribirCliente" || accion === "inscribirClienteProductos") {
+    const {
+      cliente_id,
+      fecha_ingreso,
+      dia_pago,
+      tasa_acordada,
+      tasa_extracupo,
+      capital_inicial,
+      cda_apoderada_id,
+      cda_nueva,
+      cuenta_origen,
+      plan_trazado,
+      notas,
+      productos
+    } = payload;
+
+    if (!cliente_id) throw new Error("Cliente es obligatorio");
+    if (!fecha_ingreso) throw new Error("Fecha de ingreso obligatoria");
+    const dp = Math.min(28, Math.max(1, Number(dia_pago) || 15));
+    const tasa = Number(tasa_acordada) || 0.03;
+    const tasaExt = Number(tasa_extracupo) || 0.06;
+
+    const cliente = await entities.Cliente.get(cliente_id);
+    if (!cliente) throw new Error("Cliente no encontrado");
+    const tercero = cliente.nombre || "Cliente";
+
+    // Validar si ya está inscrito
+    const ya = await entities.EmprendamosCliente.filter({ cliente_id, estado: "activo" }).catch(() => []);
+    if (ya && ya.length > 0) throw new Error("El cliente ya está inscrito como activo en Emprendamos");
+
+    // Resolver cuentas y monto
+    let totalDeuda = Number(capital_inicial) || 0;
+    const movsAsiento = [];
+
+    if (productos && Array.isArray(productos) && productos.length > 0) {
+      totalDeuda = productos.reduce((s, p) => s + (Number(p.saldo_inicial) || 0), 0);
+      movsAsiento.push({
+        subcuenta: "120502",
+        debito: totalDeuda,
+        credito: 0,
+        descripcion: `Préstamo inicial Emprendamos — ${tercero}`,
+        tercero,
+        cliente_id
+      });
+      for (const p of productos) {
+        movsAsiento.push({
+          subcuenta: String(p.subcuenta || "11100101"),
+          debito: 0,
+          credito: Number(p.saldo_inicial) || 0,
+          descripcion: p.concepto || `Obligación asumida`,
+          tercero,
+          cliente_id,
+          producto_credito_id: p.producto_credito_id || null,
+          cuenta_ahorro_id: p.cuenta_ahorro_id || null
+        });
+      }
+    } else {
+      if (!cuenta_origen || !cuenta_origen.subcuenta) {
+        throw new Error("Seleccione la cuenta de origen para registrar el desembolso/pago de obligaciones");
+      }
+      movsAsiento.push(
+        {
+          subcuenta: "120502",
+          debito: totalDeuda,
+          credito: 0,
+          descripcion: `Compra de cartera inicial — ${tercero}`,
+          tercero,
+          cliente_id
+        },
+        {
+          subcuenta: String(cuenta_origen.subcuenta),
+          debito: 0,
+          credito: totalDeuda,
+          descripcion: `Pago obligaciones cliente — ${tercero}`,
+          tercero,
+          cliente_id,
+          cuenta_ahorro_id: cuenta_origen.cuenta_ahorro_id || null,
+          producto_credito_id: cuenta_origen.producto_credito_id || null
+        }
+      );
+    }
+
+    if (totalDeuda <= 0) throw new Error("El monto total de deuda asumida debe ser mayor a 0");
+
+    // Manejo de CDA apoderada nueva si se especificó
+    let cdaIdFinal = cda_apoderada_id || "";
+    if (cda_nueva && cda_nueva.banco && cda_nueva.numero_completo) {
+      try {
+        const cdaCreada = await entities.CuentaAhorro.create({
+          banco: cda_nueva.banco,
+          titular_id: cliente_id,
+          numero_completo: cda_nueva.numero_completo,
+          nombre: cda_nueva.nombre || `CDA ${cda_nueva.banco} ${tercero}`,
+          saldo: Number(cda_nueva.saldo) || 0,
+          estado: "activa",
+          nota: cda_nueva.nota || "Creada para administración Emprendamos"
+        });
+        cdaIdFinal = cdaCreada.id;
+      } catch (errCda) {
+        console.warn("No se pudo crear CDA apoderada:", errCda);
+      }
+    }
+
+    // Comprobante contable
+    const compRes = await createComprobante(entities, {
+      tipo: "diario",
+      fecha: fecha_ingreso,
+      descripcion: `Inscripción Emprendamos — ${tercero}`,
+      movimientos: movsAsiento
+    });
+    const comprobante_id = compRes?.comprobante?.id || null;
+
+    // Calcular cupo total en tarjetas del cliente
+    const prodsCliente = await entities.ProductoCredito.filter({ titular_id: cliente_id, estado: "activo" }).catch(() => []);
+    const cupoTDC = (prodsCliente || [])
+      .filter((p) => p.tipo === "TDC")
+      .reduce((s, p) => s + (Number(p.cupo) || 0), 0);
+
+    // Crear registro EmprendamosCliente
+    const fechaSalidaEligible = sumarMesesISO(fecha_ingreso, 12);
+    const inscrito = await entities.EmprendamosCliente.create({
+      cliente_id,
+      fecha_ingreso,
+      dia_pago: dp,
+      tasa_acordada: tasa,
+      tasa_extracupo: tasaExt,
+      capital_inicial: totalDeuda,
+      saldo_deuda: totalDeuda,
+      cupo_asignado: cupoTDC,
+      extracupo_autorizado: 0,
+      cda_apoderada_id: cdaIdFinal,
+      comprobante_cartera_id: comprobante_id,
+      plan_trazado: plan_trazado || "",
+      contrato_url: "",
+      fecha_eligible_salida: fechaSalidaEligible,
+      estado: "activo",
+      notas: notas || ""
+    });
+
+    // Actualizar líneas de negocio del cliente
+    const lineasActuales = Array.isArray(cliente.lineas_negocio) ? cliente.lineas_negocio : [];
+    if (!lineasActuales.includes("emprendamos")) {
+      await entities.Cliente.update(cliente_id, {
+        lineas_negocio: [...lineasActuales, "emprendamos"],
+        ...(cdaIdFinal ? { cda_asignada_id: cdaIdFinal } : {})
+      }).catch(() => {});
+    }
+
+    // Crear crédito inicial de cartera (EM-001...)
+    const codigoCredito = await generarCodigoCreditoEmprendamos(entities);
+    const credito = await entities.EmprendamosCredito.create({
+      emprendamos_cliente_id: inscrito.id,
+      cliente_id,
+      codigo: codigoCredito,
+      tipo: "cartera_inicial",
+      concepto: `Cartera inicial asumida — ${productos?.length ? productos.length + " partidas" : "1 partida"}`,
+      capital: totalDeuda,
+      tasa_nominal: tasa,
+      cuota_fija: 0,
+      fecha: fecha_ingreso,
+      dia_pago: dp,
+      fecha_proximo_pago: calcularProximoPagoEmprendamos(dp, fecha_ingreso),
+      saldo_capital: totalDeuda,
+      saldo_intereses: 0,
+      estado: "vigente",
+      comprobante_id,
+      producto_credito_id: "",
+      notas: notas || ""
+    });
+
+    return {
+      success: true,
+      inscrito,
+      credito,
+      comprobante: compRes?.comprobante
+    };
+  }
+
+  // 2. AGREGAR NUEVO PRÉSTAMO (Habitual @ 3% o Extracupo @ 6%)
+  if (accion === "agregarCredito") {
+    const {
+      emprendamos_cliente_id,
+      tipo, // 'habitual' | 'extracupo'
+      concepto,
+      capital,
+      tasa_nominal,
+      cuota_fija = 0,
+      fecha,
+      cuenta_origen,
+      producto_credito_id,
+      notas
+    } = payload;
+
+    if (!emprendamos_cliente_id) throw new Error("Cliente Emprendamos es obligatorio");
+    if (!["habitual", "extracupo"].includes(tipo)) throw new Error("Tipo debe ser habitual o extracupo");
+    const monto = Number(capital);
+    if (!monto || monto <= 0) throw new Error("El monto del crédito debe ser mayor a 0");
+    if (!fecha) throw new Error("Fecha es obligatoria");
+
+    const tieneLineas = Array.isArray(payload.movimientos) && payload.movimientos.length > 0;
+    if (!tieneLineas && (!cuenta_origen || !cuenta_origen.subcuenta)) {
+      throw new Error("Seleccione la cuenta de origen del dinero o detalle las partidas de desembolso");
+    }
+
+    const inscrito = await entities.EmprendamosCliente.get(emprendamos_cliente_id);
+    if (!inscrito) throw new Error("Inscripción no encontrada");
+    if (inscrito.estado !== "activo") throw new Error("El cliente no está activo en Emprendamos");
+
+    const cliente = await entities.Cliente.get(inscrito.cliente_id);
+    const tercero = cliente?.nombre || "Cliente";
+
+    // Validar cupo disponible
+    const creditosCliente = await entities.EmprendamosCredito.filter({
+      emprendamos_cliente_id,
+      estado: "vigente"
+    }).catch(() => []);
+
+    const tasa = tipo === "extracupo"
+      ? (Number(tasa_nominal) || inscrito.tasa_extracupo || 0.06)
+      : (Number(tasa_nominal) || inscrito.tasa_acordada || 0.03);
+
+    if (tipo === "habitual") {
+      const usado = (creditosCliente || [])
+        .filter((c) => c.tipo === "habitual" || c.tipo === "cartera_inicial")
+        .reduce((s, c) => s + (Number(c.saldo_capital) || 0), 0);
+      const cupoTotal = Number(inscrito.cupo_asignado) || 0;
+      if (usado + monto > cupoTotal) {
+        throw new Error(`Cupo insuficiente: Cupo asignado $${cupoTotal.toLocaleString()} | Ya usado $${usado.toLocaleString()} | Solicitado $${monto.toLocaleString()}`);
+      }
+    }
+
+    // Asiento contable de egreso (Débito 120502 vs Crédito(s) de salida)
+    let movimientosAsiento = [];
+    if (tieneLineas) {
+      movimientosAsiento = [
+        {
+          subcuenta: "120502",
+          debito: monto,
+          credito: 0,
+          descripcion: concepto || `Crédito ${tipo} — ${tercero}`,
+          tercero,
+          cliente_id: inscrito.cliente_id
+        },
+        ...payload.movimientos.map((m) => ({
+          subcuenta: String(m.subcuenta),
+          debito: 0,
+          credito: Number(m.credito) || 0,
+          descripcion: m.descripcion || concepto || `Desembolso préstamo ${tipo}`,
+          tercero: m.tercero || tercero,
+          cliente_id: inscrito.cliente_id,
+          cuenta_ahorro_id: m.cuenta_ahorro_id || null,
+          producto_credito_id: m.producto_credito_id || null
+        }))
+      ];
+    } else {
+      movimientosAsiento = [
+        {
+          subcuenta: "120502",
+          debito: monto,
+          credito: 0,
+          descripcion: `Crédito ${tipo} — ${tercero}`,
+          tercero,
+          cliente_id: inscrito.cliente_id
+        },
+        {
+          subcuenta: String(cuenta_origen.subcuenta),
+          debito: 0,
+          credito: monto,
+          descripcion: concepto || `Desembolso préstamo ${tipo}`,
+          tercero,
+          cliente_id: inscrito.cliente_id,
+          cuenta_ahorro_id: cuenta_origen.cuenta_ahorro_id || null,
+          producto_credito_id: cuenta_origen.producto_credito_id || null
+        }
+      ];
+    }
+
+    const compRes = await createComprobante(entities, {
+      tipo: "egreso",
+      fecha,
+      descripcion: `Crédito ${tipo} Emprendamos — ${tercero}`,
+      movimientos: movimientosAsiento
+    });
+
+    const codigo = await generarCodigoCreditoEmprendamos(entities);
+    const credito = await entities.EmprendamosCredito.create({
+      emprendamos_cliente_id,
+      cliente_id: inscrito.cliente_id,
+      codigo,
+      tipo,
+      concepto: concepto || `Crédito ${tipo}`,
+      capital: monto,
+      tasa_nominal: tasa,
+      cuota_fija: Number(cuota_fija) || 0,
+      fecha,
+      dia_pago: inscrito.dia_pago,
+      fecha_proximo_pago: calcularProximoPagoEmprendamos(inscrito.dia_pago, fecha),
+      saldo_capital: monto,
+      saldo_intereses: 0,
+      estado: "vigente",
+      comprobante_id: compRes?.comprobante?.id || null,
+      producto_credito_id: producto_credito_id || "",
+      notas: notas || ""
+    });
+
+    // Actualizar saldo de deuda del cliente
+    await entities.EmprendamosCliente.update(emprendamos_cliente_id, {
+      saldo_deuda: (Number(inscrito.saldo_deuda) || 0) + monto
+    });
+
+    return {
+      success: true,
+      credito,
+      comprobante: compRes?.comprobante
+    };
+  }
+
+  // 3. REGISTRAR COMISIÓN O NUEVO CUPO TDC (10% sobre cupo/saldo)
+  if (accion === "registrarComision" || accion === "registrarNuevoCupo") {
+    const {
+      emprendamos_cliente_id,
+      producto_credito_id,
+      base = 0,
+      porcentaje = 0.10,
+      fecha = hoy,
+      notas,
+      cobrar_comision = true
+    } = payload;
+
+    if (!emprendamos_cliente_id) throw new Error("Cliente Emprendamos es obligatorio");
+    const inscrito = await entities.EmprendamosCliente.get(emprendamos_cliente_id);
+    if (!inscrito) throw new Error("Inscripción no encontrada");
+
+    const cliente = await entities.Cliente.get(inscrito.cliente_id);
+    const tercero = cliente?.nombre || "Cliente";
+
+    let baseCalculo = Number(base) || 0;
+    let tdcProducto = null;
+
+    if (producto_credito_id) {
+      tdcProducto = await entities.ProductoCredito.get(producto_credito_id);
+      if (tdcProducto) {
+        baseCalculo = Number(tdcProducto.cupo) || baseCalculo;
+      }
+    }
+
+    // Refrescar cupo total
+    const prods = await entities.ProductoCredito.filter({ titular_id: inscrito.cliente_id, estado: "activo" }).catch(() => []);
+    const nuevoCupoTotal = (prods || [])
+      .filter((p) => p.tipo === "TDC")
+      .reduce((s, p) => s + (Number(p.cupo) || 0), 0);
+    await entities.EmprendamosCliente.update(emprendamos_cliente_id, { cupo_asignado: nuevoCupoTotal });
+
+    let credito = null;
+    let comprobante = null;
+    let comisionMonto = 0;
+
+    if (cobrar_comision !== false && baseCalculo > 0) {
+      const pct = Number(porcentaje) || 0.10;
+      comisionMonto = Math.round(baseCalculo * pct);
+
+      const compRes = await createComprobante(entities, {
+        tipo: "diario",
+        fecha,
+        descripcion: `Comisión nuevo producto Emprendamos — ${tercero}`,
+        movimientos: [
+          {
+            subcuenta: "120502",
+            debito: comisionMonto,
+            credito: 0,
+            descripcion: `Comisión ${tdcProducto?.nombre || "nuevo producto"} — ${tercero}`,
+            tercero,
+            cliente_id: inscrito.cliente_id
+          },
+          {
+            subcuenta: "410510",
+            debito: 0,
+            credito: comisionMonto,
+            descripcion: `Comisión ${(pct * 100).toFixed(0)}% por nuevo producto`,
+            tercero,
+            cliente_id: inscrito.cliente_id
+          }
+        ]
+      });
+      comprobante = compRes?.comprobante;
+
+      const codigo = await generarCodigoCreditoEmprendamos(entities);
+      credito = await entities.EmprendamosCredito.create({
+        emprendamos_cliente_id,
+        cliente_id: inscrito.cliente_id,
+        codigo,
+        tipo: "comision",
+        concepto: `Comisión ${tdcProducto?.nombre || "nuevo producto"} (${(pct * 100).toFixed(0)}%)`,
+        capital: comisionMonto,
+        tasa_nominal: 0,
+        cuota_fija: 0,
+        fecha,
+        dia_pago: inscrito.dia_pago,
+        fecha_proximo_pago: "",
+        saldo_capital: comisionMonto,
+        saldo_intereses: 0,
+        estado: "vigente",
+        comprobante_id: comprobante?.id || null,
+        producto_credito_id: producto_credito_id || "",
+        notas: notas || ""
+      });
+
+      await entities.EmprendamosCliente.update(emprendamos_cliente_id, {
+        saldo_deuda: (Number(inscrito.saldo_deuda) || 0) + comisionMonto
+      });
+    }
+
+    return {
+      success: true,
+      cupo_asignado: nuevoCupoTotal,
+      comision: comisionMonto,
+      credito,
+      comprobante
+    };
+  }
+
+  // 4. REGISTRAR ABONO
+  if (accion === "registrarAbono") {
+    const {
+      emprendamos_cliente_id,
+      fecha = hoy,
+      valor_total,
+      cuenta_ingreso,
+      tipo = "otro", // 'cuota_minima' | 'capital' | 'total' | 'fijo' | 'otro'
+      detalles = [],
+      notas = ""
+    } = payload;
+
+    if (!emprendamos_cliente_id) throw new Error("Cliente Emprendamos obligatorio");
+    const monto = Number(valor_total);
+    if (!monto || monto <= 0) throw new Error("Valor del abono debe ser mayor a 0");
+    if (!cuenta_ingreso || !cuenta_ingreso.subcuenta) throw new Error("Seleccione la cuenta contable de ingreso");
+    if (!detalles || detalles.length === 0) throw new Error("Especifique al menos un crédito a abonar");
+
+    const inscrito = await entities.EmprendamosCliente.get(emprendamos_cliente_id);
+    if (!inscrito) throw new Error("Inscripción no encontrada");
+    const cliente = await entities.Cliente.get(inscrito.cliente_id);
+    const tercero = cliente?.nombre || "Cliente";
+
+    // Asiento de ingreso: Débito cuenta_ingreso vs Crédito 120502 (reduce cartera)
+    const compRes = await createComprobante(entities, {
+      tipo: "ingreso",
+      fecha,
+      descripcion: `Abono Emprendamos — ${tercero}`,
+      movimientos: [
+        {
+          subcuenta: String(cuenta_ingreso.subcuenta),
+          debito: monto,
+          credito: 0,
+          descripcion: "Abono cartera Emprendamos",
+          tercero,
+          cliente_id: inscrito.cliente_id,
+          cuenta_ahorro_id: cuenta_ingreso.cuenta_ahorro_id || null,
+          producto_credito_id: cuenta_ingreso.producto_credito_id || null
+        },
+        {
+          subcuenta: "120502",
+          debito: 0,
+          credito: monto,
+          descripcion: `Abono cartera — ${tercero}`,
+          tercero,
+          cliente_id: inscrito.cliente_id
+        }
+      ]
+    });
+
+    const comprobante_id = compRes?.comprobante?.id || null;
+
+    // Distribuir e imputar por crédito
+    const detallesGuardados = [];
+    let nuevaDeuda = Number(inscrito.saldo_deuda) || 0;
+
+    for (const d of detalles) {
+      const c = await entities.EmprendamosCredito.get(d.credito_id);
+      if (!c) continue;
+
+      const val = Number(d.valor_aplicado) || 0;
+      if (val <= 0) continue;
+
+      const saldoInt = Number(c.saldo_intereses) || 0;
+      const saldoCap = Number(c.saldo_capital) || 0;
+
+      let pagoInt = Number(d.intereses);
+      let pagoCap = Number(d.capital);
+
+      if (pagoInt == null || isNaN(pagoInt)) {
+        pagoInt = Math.min(val, saldoInt);
+        pagoCap = Math.min(val - pagoInt, saldoCap);
+      }
+
+      const nuevoSaldoInt = Math.max(0, saldoInt - pagoInt);
+      const nuevoSaldoCap = Math.max(0, saldoCap - pagoCap);
+      const saldado = nuevoSaldoCap <= 0.01 && nuevoSaldoInt <= 0.01;
+
+      await entities.EmprendamosCredito.update(c.id, {
+        saldo_intereses: nuevoSaldoInt,
+        saldo_capital: nuevoSaldoCap,
+        estado: saldado ? "saldado" : "vigente",
+        fecha_proximo_pago: saldado ? "" : calcularProximoPagoEmprendamos(c.dia_pago || inscrito.dia_pago, fecha)
+      });
+
+      detallesGuardados.push({
+        credito_id: c.id,
+        valor_aplicado: val,
+        intereses: pagoInt,
+        capital: pagoCap
+      });
+
+      nuevaDeuda -= val;
+    }
+
+    const abono = await entities.EmprendamosAbono.create({
+      cliente_id: inscrito.cliente_id,
+      emprendamos_cliente_id,
+      fecha,
+      valor_total: monto,
+      tipo,
+      comprobante_id,
+      subcuenta_ingreso: String(cuenta_ingreso.subcuenta),
+      cda_id: cuenta_ingreso.cuenta_ahorro_id || "",
+      producto_credito_id: cuenta_ingreso.producto_credito_id || "",
+      detalles: detallesGuardados,
+      notas: notas || ""
+    });
+
+    await entities.EmprendamosCliente.update(emprendamos_cliente_id, {
+      saldo_deuda: Math.max(0, nuevaDeuda)
+    });
+
+    return {
+      success: true,
+      abono,
+      comprobante: compRes?.comprobante
+    };
+  }
+
+  // 5. GENERACIÓN MENSUAL DE INTERESES (Corte día 30 / fin de mes)
+  if (accion === "generarInteresesMensuales") {
+    const {
+      emprendamos_cliente_id,
+      periodo, // 'YYYY-MM'
+      fecha = hoy
+    } = payload;
+
+    const per = periodo || fecha.substring(0, 7);
+    const filterQuery = { estado: "activo" };
+    if (emprendamos_cliente_id) filterQuery.id = emprendamos_cliente_id;
+
+    const inscritos = await entities.EmprendamosCliente.filter(filterQuery).catch(() => []);
+    let totalInteresesGlobal = 0;
+    const generadosGlobal = [];
+
+    for (const ins of (inscritos || [])) {
+      const cliente = await entities.Cliente.get(ins.cliente_id);
+      const tercero = cliente?.nombre || "Cliente";
+
+      const creditos = await entities.EmprendamosCredito.filter({
+        emprendamos_cliente_id: ins.id,
+        estado: "vigente"
+      }).catch(() => []);
+
+      let totalIntCliente = 0;
+      const generadosCliente = [];
+
+      for (const c of (creditos || [])) {
+        if (c.tipo === "comision") continue;
+        const cap = Number(c.saldo_capital) || 0;
+        if (cap <= 0) continue;
+
+        // Idempotencia: no cobrar dos veces el mismo periodo
+        const yaGen = await entities.EmprendamosInteres.filter({
+          credito_id: c.id,
+          periodo: per,
+          estado: "generado"
+        }).catch(() => []);
+        if (yaGen && yaGen.length > 0) continue;
+
+        const rawTasa = Number(c.tasa_nominal);
+        const tasa = isNaN(rawTasa) || rawTasa <= 0 ? 0.03 : (rawTasa > 1 ? rawTasa / 100 : rawTasa);
+        const interesCalculado = Math.round(Math.round(cap) * tasa);
+        if (interesCalculado <= 0) continue;
+
+        const interesRec = await entities.EmprendamosInteres.create({
+          emprendamos_cliente_id: ins.id,
+          cliente_id: ins.cliente_id,
+          credito_id: c.id,
+          periodo: per,
+          capital_base: Math.round(cap),
+          tasa,
+          intereses: Math.round(interesCalculado),
+          comprobante_id: "",
+          estado: "generado",
+          fecha
+        });
+
+        await entities.EmprendamosCredito.update(c.id, {
+          saldo_intereses: (Number(c.saldo_intereses) || 0) + interesCalculado
+        });
+
+        generadosCliente.push({
+          credito_id: c.id,
+          codigo: c.codigo,
+          intereses: interesCalculado,
+          interes_id: interesRec.id
+        });
+        totalIntCliente += interesCalculado;
+      }
+
+      if (totalIntCliente > 0) {
+        // Asiento contable mensual: Débito 120502 vs Crédito 410509 (Ingresos por intereses)
+        const compRes = await createComprobante(entities, {
+          tipo: "diario",
+          fecha,
+          descripcion: `Intereses Emprendamos periodo ${per} — ${tercero}`,
+          movimientos: [
+            {
+              subcuenta: "120502",
+              debito: totalIntCliente,
+              credito: 0,
+              descripcion: `Intereses causados ${per} — ${tercero}`,
+              tercero,
+              cliente_id: ins.cliente_id
+            },
+            {
+              subcuenta: "410509",
+              debito: 0,
+              credito: totalIntCliente,
+              descripcion: `Intereses devengados ${per}`,
+              tercero,
+              cliente_id: ins.cliente_id
+            }
+          ]
+        });
+
+        const compId = compRes?.comprobante?.id || "";
+        for (const g of generadosCliente) {
+          await entities.EmprendamosInteres.update(g.interes_id, { comprobante_id: compId }).catch(() => {});
+        }
+
+        await entities.EmprendamosCliente.update(ins.id, {
+          saldo_deuda: (Number(ins.saldo_deuda) || 0) + totalIntCliente
+        });
+
+        totalInteresesGlobal += totalIntCliente;
+        generadosGlobal.push(...generadosCliente);
+      }
+    }
+
+    return {
+      success: true,
+      periodo: per,
+      total_intereses: totalInteresesGlobal,
+      creditos_procesados: generadosGlobal.length
+    };
+  }
+
+  // 6. GENERAR ESTADO DE CUENTA
+  if (accion === "generarEstadoCuenta") {
+    const { emprendamos_cliente_id, periodo } = payload;
+    if (!emprendamos_cliente_id) throw new Error("Cliente Emprendamos es obligatorio");
+
+    const inscrito = await entities.EmprendamosCliente.get(emprendamos_cliente_id);
+    if (!inscrito) throw new Error("Inscripción no encontrada");
+
+    const per = periodo || hoy.substring(0, 7);
+    const inicio = `${per}-01`;
+    const fin = sumarMesesISO(inicio, 1);
+
+    const [creditos, intereses, abonos] = await Promise.all([
+      entities.EmprendamosCredito.filter({ emprendamos_cliente_id }),
+      entities.EmprendamosInteres.filter({ emprendamos_cliente_id, periodo: per, estado: "generado" }),
+      entities.EmprendamosAbono.filter({ emprendamos_cliente_id })
+    ]);
+
+    const prestamosNuevos = (creditos || []).filter((c) => c.fecha >= inicio && c.fecha < fin && c.tipo !== "cartera_inicial");
+    const abonosPeriodo = (abonos || []).filter((a) => a.fecha >= inicio && a.fecha < fin);
+
+    const totalInt = (intereses || []).reduce((s, i) => s + (Number(i.intereses) || 0), 0);
+    const totalNuevosPrest = prestamosNuevos.reduce((s, c) => s + (Number(c.capital) || 0), 0);
+    const totalAbon = abonosPeriodo.reduce((s, a) => s + (Number(a.valor_total) || 0), 0);
+
+    const saldoFinal = Number(inscrito.saldo_deuda) || 0;
+    const saldoInicial = saldoFinal - totalInt - totalNuevosPrest + totalAbon;
+
+    return {
+      success: true,
+      periodo: per,
+      saldo_inicial: saldoInicial,
+      prestamos_nuevos: totalNuevosPrest,
+      intereses_generados: totalInt,
+      abonos: totalAbon,
+      saldo_final: saldoFinal,
+      creditos: creditos || [],
+      detalle_prestamos: prestamosNuevos,
+      detalle_abonos: abonosPeriodo,
+      detalle_intereses: intereses || []
+    };
+  }
+
+  // 7. RECALCULAR ESTADO
+  if (accion === "recalcularEstado") {
+    const inscritos = await entities.EmprendamosCliente.filter({ estado: "activo" }).catch(() => []);
+    let count = 0;
+
+    for (const ins of (inscritos || [])) {
+      const creditos = await entities.EmprendamosCredito.filter({ emprendamos_cliente_id: ins.id }).catch(() => []);
+      let totalDeuda = 0;
+
+      for (const c of (creditos || [])) {
+        const cap = Number(c.saldo_capital) || 0;
+        const int = Number(c.saldo_intereses) || 0;
+
+        if (cap <= 0.01 && int <= 0.01) {
+          if (c.estado !== "saldado") {
+            await entities.EmprendamosCredito.update(c.id, { estado: "saldado", fecha_proximo_pago: "" });
+          }
+        } else {
+          totalDeuda += (cap + int);
+          await entities.EmprendamosCredito.update(c.id, {
+            fecha_proximo_pago: calcularProximoPagoEmprendamos(c.dia_pago || ins.dia_pago, hoy)
+          });
+        }
+      }
+
+      await entities.EmprendamosCliente.update(ins.id, { saldo_deuda: Math.round(totalDeuda) });
+      count++;
+    }
+
+    return { success: true, actualizados: count };
+  }
+
+  // 8. SALIDA DEL CLIENTE (≥ 1 año)
+  if (accion === "salirCliente") {
+    const { emprendamos_cliente_id, fecha = hoy, motivo } = payload;
+    const ins = await entities.EmprendamosCliente.get(emprendamos_cliente_id);
+    if (!ins) throw new Error("Inscripción no encontrada");
+
+    if (ins.fecha_eligible_salida && fecha < ins.fecha_eligible_salida) {
+      throw new Error(`El cliente aún no cumple el periodo mínimo de 1 año. Elegible a partir de: ${ins.fecha_eligible_salida}`);
+    }
+
+    const saldoPendiente = Number(ins.saldo_deuda) || 0;
+    await entities.EmprendamosCliente.update(emprendamos_cliente_id, {
+      estado: "salido",
+      fecha_salida: fecha,
+      notas: (ins.notas || "") + (motivo ? `\n[Salida ${fecha}]: ${motivo}` : `\n[Salida ${fecha}]`)
+    });
+
+    return { success: true, saldo_pendiente: saldoPendiente };
+  }
+
+  // 9. ELIMINAR ABONO
+  if (accion === "eliminarAbono") {
+    const { abono_id, motivo } = payload;
+    const abono = await entities.EmprendamosAbono.get(abono_id);
+    if (!abono) throw new Error("Abono no encontrado");
+
+    if (abono.comprobante_id) {
+      try {
+        await anularComprobante(entities, { id: abono.comprobante_id, motivo: motivo || "Eliminación de abono Emprendamos" });
+      } catch (errComp) {
+        console.warn("No se pudo anular comprobante de abono:", errComp);
+      }
+    }
+
+    // Reversar saldos a cada crédito
+    const detalles = Array.isArray(abono.detalles) ? abono.detalles : [];
+    for (const d of detalles) {
+      const c = await entities.EmprendamosCredito.get(d.credito_id);
+      if (!c) continue;
+      await entities.EmprendamosCredito.update(c.id, {
+        saldo_capital: (Number(c.saldo_capital) || 0) + (Number(d.capital) || 0),
+        saldo_intereses: (Number(c.saldo_intereses) || 0) + (Number(d.intereses) || 0),
+        estado: "vigente"
+      });
+    }
+
+    const ins = await entities.EmprendamosCliente.get(abono.emprendamos_cliente_id);
+    if (ins) {
+      await entities.EmprendamosCliente.update(ins.id, {
+        saldo_deuda: (Number(ins.saldo_deuda) || 0) + (Number(abono.valor_total) || 0)
+      });
+    }
+
+    await entities.EmprendamosAbono.delete(abono_id);
+    return { success: true };
+  }
+
+  // 10. ELIMINAR CRÉDITO
+  if (accion === "eliminarCredito") {
+    const { credito_id, motivo } = payload;
+    const c = await entities.EmprendamosCredito.get(credito_id);
+    if (!c) throw new Error("Crédito no encontrado");
+
+    if (c.comprobante_id) {
+      try {
+        await anularComprobante(entities, { id: c.comprobante_id, motivo: motivo || `Eliminación crédito ${c.codigo}` });
+      } catch (errComp) {
+        console.warn("No se pudo anular comprobante del crédito:", errComp);
+      }
+    }
+
+    const ins = await entities.EmprendamosCliente.get(c.emprendamos_cliente_id);
+    if (ins) {
+      const resta = (Number(c.saldo_capital) || 0) + (Number(c.saldo_intereses) || 0);
+      await entities.EmprendamosCliente.update(ins.id, {
+        saldo_deuda: Math.max(0, (Number(ins.saldo_deuda) || 0) - resta)
+      });
+    }
+
+    await entities.EmprendamosCredito.delete(credito_id);
+    return { success: true };
+  }
+
+  // 11. EDITAR CLIENTE
+  if (accion === "editarCliente") {
+    const { emprendamos_cliente_id, dia_pago, tasa_acordada, tasa_extracupo, extracupo_autorizado, plan_trazado, notas, estado } = payload;
+    const upd = {};
+    if (dia_pago !== undefined) upd.dia_pago = Number(dia_pago);
+    if (tasa_acordada !== undefined) upd.tasa_acordada = Number(tasa_acordada);
+    if (tasa_extracupo !== undefined) upd.tasa_extracupo = Number(tasa_extracupo);
+    if (extracupo_autorizado !== undefined) upd.extracupo_autorizado = Number(extracupo_autorizado);
+    if (plan_trazado !== undefined) upd.plan_trazado = plan_trazado;
+    if (notas !== undefined) upd.notas = notas;
+    if (estado !== undefined) upd.estado = estado;
+
+    await entities.EmprendamosCliente.update(emprendamos_cliente_id, upd);
+    return { success: true };
+  }
+
+  return { success: true };
+}

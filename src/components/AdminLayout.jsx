@@ -20,6 +20,7 @@ import {
   Sun, 
   Moon, 
   HandCoins, 
+  Sparkles,
   Bot, 
   ScanSearch, 
   Database,
@@ -73,7 +74,8 @@ const allNavGroups = [
     label: "Líneas de Negocio",
     items: [
       { to: "/admin/lineas/rooftop", label: "Aleke Rooftop", icon: Building2, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR, ROLES.AUXILIAR] },
-      { to: "/admin/lineas/pakredito", label: "Pakredito", icon: HandCoins, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR, ROLES.AUXILIAR] }
+      { to: "/admin/lineas/pakredito", label: "Pakredito", icon: HandCoins, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR, ROLES.AUXILIAR] },
+      { to: "/admin/lineas/emprendamos", label: "Emprendamos", icon: Sparkles, roles: [ROLES.ADMINISTRADOR, ROLES.CONTADOR, ROLES.AUXILIAR] }
     ]
   }
 ];
