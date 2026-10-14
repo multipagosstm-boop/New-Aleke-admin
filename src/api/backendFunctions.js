@@ -3089,6 +3089,33 @@ export async function calcularEstadoExtractos(entities, payload = {}) {
     });
 
     pExts.forEach((ext, idx) => {
+      // Si el extracto está saltado o anulado, NUNCA recalcularlo ni pasarlo a "pagado"
+      const esSaltado = ext.estado === "saltado" || !!ext.motivo_salto || String(ext.observaciones || "").includes("EXTRACTO SALTADO");
+      if (esSaltado) {
+        if (ext.estado !== "saltado") {
+          // Reparar si fue sobreescrito previamente como "pagado"
+          updatesToRun.push(entities.ExtractoProducto.update(ext.id, {
+            estado: "saltado",
+            saldo_a_pagar: 0,
+            saldo_pendiente: 0,
+            total_abonado: 0
+          }));
+        }
+        resultados.push({
+          extracto_id: ext.id,
+          producto_id: ext.producto_id,
+          total_abonado: 0,
+          saldo_pendiente: 0,
+          porcentaje_pagado: 100,
+          estado: "saltado"
+        });
+        return;
+      }
+
+      if (ext.estado === "anulado") {
+        return;
+      }
+
       // Determinar la fecha de corte del extracto normalizada
       let fechaCorteExt = normalizeDate(ext.fecha_corte);
       const diaCorteProd = Math.floor(prod?.fecha_corte || 1);

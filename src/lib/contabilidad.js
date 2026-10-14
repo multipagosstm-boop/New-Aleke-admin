@@ -199,9 +199,20 @@ export function evaluarCicloCorteTarjeta(producto, extractos = [], fechaRef = ne
     const nextY = m === 12 ? y + 1 : y;
     const nextMesStr = `${nextY}-${String(nextM).padStart(2, "0")}`;
 
+    const prevM = m === 1 ? 12 : m - 1;
+    const prevY = m === 1 ? y - 1 : y;
+    const prevMesStr = `${prevY}-${String(prevM).padStart(2, "0")}`;
+
     return extsProd.some((e) => {
-      if (e.estado === "saltado") {
-        if (e.periodo === mesStr || e.periodo === nextMesStr) return true;
+      const esSaltado = e.estado === "saltado" || !!e.motivo_salto || String(e.observaciones || "").includes("EXTRACTO SALTADO");
+      if (esSaltado) {
+        if (e.fecha_corte) {
+          const fc = new Date(e.fecha_corte + "T00:00:00");
+          const diffDias = Math.abs((fc - fechaCorte) / 86400000);
+          if (diffDias <= 7) return true;
+          if (e.fecha_corte.startsWith(mesStr)) return true;
+        }
+        if (e.periodo === mesStr || e.periodo === nextMesStr || e.periodo === prevMesStr) return true;
       }
       if (e.fecha_corte) {
         const fc = new Date(e.fecha_corte + "T00:00:00");

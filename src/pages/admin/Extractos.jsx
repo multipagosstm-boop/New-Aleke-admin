@@ -499,9 +499,35 @@ export default function Extractos() {
 
   const handleSaltar = async (producto, { motivo, cancelarTarjeta }) => {
     try {
+      const ev = calcularPlazo(producto);
+      let targetPeriodo = periodoRegistro;
+      let targetFechaCorte = null;
+
+      if (ev?.corteAEvaluar) {
+        const fc = new Date(ev.corteAEvaluar);
+        const y = fc.getFullYear();
+        const m = String(fc.getMonth() + 1).padStart(2, "0");
+        const d = String(fc.getDate()).padStart(2, "0");
+        targetFechaCorte = `${y}-${m}-${d}`;
+        targetPeriodo = modoRegistro === "por_mes"
+          ? periodoRegistro
+          : (ev.periodoEsperado || ev.periodoCorte || `${y}-${m}`);
+      } else if (ev?.cutoff) {
+        const fc = new Date(ev.cutoff);
+        const y = fc.getFullYear();
+        const m = String(fc.getMonth() + 1).padStart(2, "0");
+        const d = String(fc.getDate()).padStart(2, "0");
+        targetFechaCorte = `${y}-${m}-${d}`;
+        targetPeriodo = modoRegistro === "por_mes"
+          ? periodoRegistro
+          : (ev.periodoEsperado || `${y}-${m}`);
+      }
+
       await base44.entities.ExtractoProducto.create({
         producto_id: producto.id,
-        periodo: periodoRegistro,
+        periodo: targetPeriodo,
+        fecha_corte: targetFechaCorte,
+        fecha_pago: targetFechaCorte,
         saldo_a_pagar: 0,
         observaciones: `EXTRACTO SALTADO — ${motivo}`,
         motivo_salto: motivo,
@@ -513,11 +539,13 @@ export default function Extractos() {
         porcentaje_pagado: 100,
         saldo_a_favor: 0,
       });
+
       if (cancelarTarjeta) {
         await base44.entities.ProductoCredito.update(producto.id, { estado: "inactivo" });
       }
       toast.success("Período saltado correctamente.");
-      loadData();
+      setSaltarTarget(null);
+      await loadData(false);
     } catch (e) {
       toast.error(e.message || "Error al saltar el extracto");
     }
@@ -963,7 +991,13 @@ export default function Extractos() {
         open={!!saltarTarget}
         onOpenChange={(v) => !v && setSaltarTarget(null)}
         producto={saltarTarget}
-        periodo={periodoRegistro}
+        periodo={(() => {
+          if (!saltarTarget) return periodoRegistro;
+          const ev = calcularPlazo(saltarTarget);
+          return modoRegistro === "por_mes"
+            ? periodoRegistro
+            : (ev?.periodoEsperado || ev?.periodoCorte || periodoRegistro);
+        })()}
         onConfirmado={(opts) => handleSaltar(saltarTarget, opts)}
       />
 
