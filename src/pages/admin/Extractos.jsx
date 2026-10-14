@@ -34,7 +34,6 @@ export default function Extractos() {
   const [pdfModal, setPdfModal] = useState(false);
   const [recalcLoadingId, setRecalcLoadingId] = useState(null);
   const [periodoFiltro, setPeriodoFiltro] = useState("todos");
-  const [periodoRegistro, setPeriodoRegistro] = useState(new Date().toISOString().substring(0, 7));
   const [busqueda, setBusqueda] = useState("");
   const [filtroPlazo, setFiltroPlazo] = useState("para_registrar");
   const [pageSize, setPageSize] = useState(10);
@@ -75,7 +74,6 @@ export default function Extractos() {
       .some((v) => normalize(v).includes(q));
   };
 
-  const [modoRegistro, setModoRegistro] = useState("pendientes_corte"); // "pendientes_corte" | "por_mes"
   const [pdfModalTarget, setPdfModalTarget] = useState({ open: false, productoId: "", periodo: "" });
 
   const [refreshing, setRefreshing] = useState(false);
@@ -121,10 +119,16 @@ export default function Extractos() {
 
   const periodos = useMemo(() => {
     const s = new Set(extractos.map((e) => e.periodo).filter(Boolean));
+    const hoy = new Date();
+    // Asegurar que el mes actual y meses cercanos estén siempre disponibles para filtrar
+    for (let i = -12; i <= 2; i++) {
+      const d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1);
+      s.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
     return Array.from(s).sort().reverse();
   }, [extractos]);
 
-  // Evaluación del ciclo de corte y extracto para todos los productos activos
+  // Evaluación del ciclo de corte y extracto para todos los productos activos (modo cortes pendientes general)
   const evaluacionCorteMap = useMemo(() => {
     const map = {};
     productos.forEach((p) => {
@@ -134,33 +138,6 @@ export default function Extractos() {
     });
     return map;
   }, [productos, extractos]);
-
-  // Tarjetas cuyo corte ya pasó y están fuera de plazo (URGENTES)
-  const tarjetasVencidas = useMemo(() => {
-    return productos.filter((p) => {
-      if (p.estado !== "activo") return false;
-      const ev = evaluacionCorteMap[p.id];
-      return ev && ev.estado === "urgente";
-    });
-  }, [productos, evaluacionCorteMap]);
-
-  // Tarjetas cuyo corte ya pasó y están dentro de los 5 días de plazo
-  const tarjetasEnPlazo = useMemo(() => {
-    return productos.filter((p) => {
-      if (p.estado !== "activo") return false;
-      const ev = evaluacionCorteMap[p.id];
-      return ev && ev.estado === "en_plazo";
-    });
-  }, [productos, evaluacionCorteMap]);
-
-  // Tarjetas cuyo próximo corte está en el futuro
-  const tarjetasProximas = useMemo(() => {
-    return productos.filter((p) => {
-      if (p.estado !== "activo") return false;
-      const ev = evaluacionCorteMap[p.id];
-      return ev && ev.estado === "proximo";
-    });
-  }, [productos, evaluacionCorteMap]);
 
   const calcularPlazoMesEspecifico = useCallback((p, per) => {
     if (!p || !per) return null;
@@ -193,31 +170,81 @@ export default function Extractos() {
       mensaje = `Próximo corte: ${cutoffFmt} (en ${diasDiferencia} día${diasDiferencia === 1 ? "" : "s"})`;
     }
 
-    return { cutoff, deadline, estado, mensaje, diasDiferencia, periodoEsperado: per };
+    return { cutoff, deadline, estado, mensaje, diasDiferencia, periodoEsperado: per, corteAEvaluar: cutoff };
   }, []);
 
-  const calcularPlazo = useCallback((p) => {
-    if (modoRegistro === "por_mes") {
-      return calcularPlazoMesEspecifico(p, periodoRegistro);
-    }
-    return evaluacionCorteMap[p.id] || null;
-  }, [modoRegistro, periodoRegistro, evaluacionCorteMap, calcularPlazoMesEspecifico]);
+  // Helper para verificar si un producto ya tiene extracto registrado o saltado para un período específico
+  const tieneExtractoEnPeriodo = useCallback((productoId, per) => {
+    if (!productoId || !per) return false;
+    return extractos.some((e) => {
+      if (String(e.producto_id) !== String(productoId)) return false;
+      if (e.periodo === per) return true;
+      if (e.fecha_corte && String(e.fecha_corte).startsWith(per)) return true;
+      const esSaltado = e.estado === "saltado" || !!e.motivo_salto || String(e.observaciones || "").includes("EXTRACTO SALTADO");
+      if (esSaltado && (e.periodo === per || (e.fecha_corte && String(e.fecha_corte).startsWith(per)))) return true;
+      return false;
+    });
+  }, [extractos]);
 
-  const productosConExtractoRegistro = useMemo(() => {
-    return new Set(
-      extractos.filter((e) => e.periodo === periodoRegistro).map((e) => e.producto_id)
-    );
-  }, [extractos, periodoRegistro]);
+  // Mapa de evaluación activo según el periodoFiltro general
+  const evaluacionActivaMap = useMemo(() => {
+    const map = {};
+    productos.forEach((p) => {
+      if (p.estado !== "activo") return;
+      if (periodoFiltro === "todos") {
+        map[p.id] = evaluacionCorteMap[p.id] || null;
+      } else {
+        if (tieneExtractoEnPeriodo(p.id, periodoFiltro)) {
+          map[p.id] = null; // Ya registrado para este período
+        } else {
+          map[p.id] = calcularPlazoMesEspecifico(p, periodoFiltro);
+        }
+      }
+    });
+    return map;
+  }, [productos, periodoFiltro, evaluacionCorteMap, tieneExtractoEnPeriodo, calcularPlazoMesEspecifico]);
+
+  const calcularPlazo = useCallback((p) => {
+    if (!p) return null;
+    return evaluacionActivaMap[p.id] || null;
+  }, [evaluacionActivaMap]);
+
+  // Tarjetas cuyo corte ya pasó y están fuera de plazo (URGENTES)
+  const tarjetasVencidas = useMemo(() => {
+    return productos.filter((p) => {
+      if (p.estado !== "activo") return false;
+      const ev = evaluacionActivaMap[p.id];
+      return ev && ev.estado === "urgente";
+    });
+  }, [productos, evaluacionActivaMap]);
+
+  // Tarjetas cuyo corte ya pasó y están dentro de los 5 días de plazo
+  const tarjetasEnPlazo = useMemo(() => {
+    return productos.filter((p) => {
+      if (p.estado !== "activo") return false;
+      const ev = evaluacionActivaMap[p.id];
+      return ev && ev.estado === "en_plazo";
+    });
+  }, [productos, evaluacionActivaMap]);
+
+  // Tarjetas cuyo próximo corte está en el futuro
+  const tarjetasProximas = useMemo(() => {
+    return productos.filter((p) => {
+      if (p.estado !== "activo") return false;
+      const ev = evaluacionActivaMap[p.id];
+      return ev && ev.estado === "proximo";
+    });
+  }, [productos, evaluacionActivaMap]);
 
   const pendientesRegistroTotal = useMemo(() => {
     return productos.filter((p) => {
       if (p.estado !== "activo" || !matchBusquedaProducto(p)) return false;
-      if (modoRegistro === "por_mes") {
-        return !productosConExtractoRegistro.has(p.id);
+      if (periodoFiltro !== "todos") {
+        return evaluacionActivaMap[p.id] !== null && evaluacionActivaMap[p.id] !== undefined;
       }
       return true;
     });
-  }, [productos, matchBusquedaProducto, modoRegistro, productosConExtractoRegistro]);
+  }, [productos, matchBusquedaProducto, periodoFiltro, evaluacionActivaMap]);
 
   const pendientesRegistro = useMemo(() => {
     return pendientesRegistroTotal.filter((p) => {
@@ -275,7 +302,7 @@ export default function Extractos() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [busqueda, periodoRegistro, filtroPlazo, pageSize]);
+  }, [busqueda, periodoFiltro, filtroPlazo, pageSize]);
 
   const totalPages = Math.ceil(sortedPendientes.length / pageSize) || 1;
   const paginatedPendientes = useMemo(() => {
@@ -500,32 +527,32 @@ export default function Extractos() {
   const handleSaltar = async (producto, { motivo, cancelarTarjeta }) => {
     try {
       const ev = calcularPlazo(producto);
-      let targetPeriodo = periodoRegistro;
-      let targetFechaCorte = null;
+      const perActual = periodoFiltro !== "todos"
+        ? periodoFiltro
+        : (ev?.periodoEsperado || ev?.periodoCorte || new Date().toISOString().substring(0, 7));
 
+      let targetFechaCorte = null;
       if (ev?.corteAEvaluar) {
         const fc = new Date(ev.corteAEvaluar);
         const y = fc.getFullYear();
         const m = String(fc.getMonth() + 1).padStart(2, "0");
         const d = String(fc.getDate()).padStart(2, "0");
         targetFechaCorte = `${y}-${m}-${d}`;
-        targetPeriodo = modoRegistro === "por_mes"
-          ? periodoRegistro
-          : (ev.periodoEsperado || ev.periodoCorte || `${y}-${m}`);
       } else if (ev?.cutoff) {
         const fc = new Date(ev.cutoff);
         const y = fc.getFullYear();
         const m = String(fc.getMonth() + 1).padStart(2, "0");
         const d = String(fc.getDate()).padStart(2, "0");
         targetFechaCorte = `${y}-${m}-${d}`;
-        targetPeriodo = modoRegistro === "por_mes"
-          ? periodoRegistro
-          : (ev.periodoEsperado || `${y}-${m}`);
+      } else {
+        const [y, m] = perActual.split("-").map(Number);
+        const dia = getDiaCorteEfectivo(producto, y, m - 1) || 1;
+        targetFechaCorte = `${y}-${String(m).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
       }
 
       await base44.entities.ExtractoProducto.create({
         producto_id: producto.id,
-        periodo: targetPeriodo,
+        periodo: perActual,
         fecha_corte: targetFechaCorte,
         fecha_pago: targetFechaCorte,
         saldo_a_pagar: 0,
@@ -543,7 +570,7 @@ export default function Extractos() {
       if (cancelarTarjeta) {
         await base44.entities.ProductoCredito.update(producto.id, { estado: "inactivo" });
       }
-      toast.success("Período saltado correctamente.");
+      toast.success(`Período ${perActual} saltado correctamente.`);
       setSaltarTarget(null);
       await loadData(false);
     } catch (e) {
@@ -568,7 +595,7 @@ export default function Extractos() {
               <p className="text-xs text-muted-foreground mt-0.5">
                 {tarjetasVencidas.length <= 4
                   ? tarjetasVencidas.map((p) => {
-                      const ev = evaluacionCorteMap[p.id];
+                      const ev = evaluacionActivaMap[p.id];
                       return `${p.nombre} (${ev?.mensaje || "corte cumplido"})`;
                     }).join(" · ")
                   : `${tarjetasVencidas.slice(0, 3).map((p) => p.nombre).join(", ")} y ${tarjetasVencidas.length - 3} tarjetas más cortaron y superaron los 5 días de plazo.`
@@ -582,7 +609,6 @@ export default function Extractos() {
             className="shrink-0 text-xs h-8 font-medium gap-1"
             onClick={() => {
               setTab("pendiente_registro");
-              setModoRegistro("pendientes_corte");
               setFiltroPlazo("para_registrar");
             }}
           >
@@ -607,7 +633,7 @@ export default function Extractos() {
             onClick={() => setTab("pendiente_registro")}
             className="relative"
           >
-            <Clock className="w-4 h-4 mr-1" /> Por Registrar ({modoRegistro === "pendientes_corte" ? tarjetasVencidas.length + tarjetasEnPlazo.length : pendientesRegistroTotal.length})
+            <Clock className="w-4 h-4 mr-1" /> Por Registrar ({periodoFiltro === "todos" ? tarjetasVencidas.length + tarjetasEnPlazo.length : pendientesRegistroTotal.length})
             {tarjetasVencidas.length > 0 && (
               <Badge variant="destructive" className="ml-1.5 px-1.5 py-0 text-[10px] font-bold">
                 {tarjetasVencidas.length} urgentes
@@ -696,52 +722,29 @@ export default function Extractos() {
               <div>
                 <h3 className="font-heading font-semibold text-base">Control de Registro de Extractos</h3>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {modoRegistro === "pendientes_corte"
-                    ? "Control por ciclo real de facturación: detecta y avisa automáticamente de tarjetas que ya cortaron (mes anterior o actual) y están pendientes de extracto."
-                    : `Control por mes de facturación seleccionado (${periodoRegistro}).`}
+                  {periodoFiltro === "todos"
+                    ? "Control por ciclo de facturación: cortes cumplidos y próximos pendientes de extracto."
+                    : `Cortes pendientes para el período seleccionado (${periodoFiltro}).`}
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
-                  <Button
-                    size="sm"
-                    variant={modoRegistro === "pendientes_corte" ? "default" : "ghost"}
-                    className="h-7 text-xs px-2.5 font-medium"
-                    onClick={() => setModoRegistro("pendientes_corte")}
-                  >
-                    <Clock className="w-3.5 h-3.5 mr-1" />
-                    Cortes Pendientes ({tarjetasVencidas.length + tarjetasEnPlazo.length})
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={modoRegistro === "por_mes" ? "default" : "ghost"}
-                    className="h-7 text-xs px-2.5 font-medium"
-                    onClick={() => setModoRegistro("por_mes")}
-                  >
-                    <Calendar className="w-3.5 h-3.5 mr-1" />
-                    Por Mes ({periodoRegistro})
-                  </Button>
-                </div>
-
-                {modoRegistro === "por_mes" && (
-                  <div className="flex items-center gap-1.5">
-                    <Button size="sm" variant="outline" onClick={() => setPeriodoRegistro(shiftMonth(periodoRegistro, -1))}>
-                      <ChevronLeft className="w-4 h-4" />
-                    </Button>
-                    <input
-                      type="month"
-                      value={periodoRegistro}
-                      onChange={(e) => setPeriodoRegistro(e.target.value)}
-                      className="h-8 rounded-md border border-input bg-transparent px-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
-                    <Button size="sm" variant="outline" onClick={() => setPeriodoRegistro(shiftMonth(periodoRegistro, 1))}>
-                      <ChevronRight className="w-4 h-4" />
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setPeriodoRegistro(new Date().toISOString().substring(0, 7))}>
-                      Hoy
+              <div className="flex items-center gap-2">
+                {periodoFiltro !== "todos" ? (
+                  <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 text-primary px-3 py-1 rounded-md text-xs font-medium">
+                    <span>Período: <strong className="font-mono">{periodoFiltro}</strong></span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                      onClick={() => setPeriodoFiltro("todos")}
+                    >
+                      Mostrar todos
                     </Button>
                   </div>
+                ) : (
+                  <Badge variant="outline" className="text-xs text-muted-foreground py-1">
+                    Cortes Pendientes (Todos los períodos)
+                  </Badge>
                 )}
               </div>
             </div>
@@ -767,15 +770,26 @@ export default function Extractos() {
             </div>
 
             <p className="text-xs text-muted-foreground mb-3">
-              {modoRegistro === "pendientes_corte"
+              {periodoFiltro === "todos"
                 ? `${sortedPendientes.length} producto(s) en vista de cortes pendientes.`
-                : pendientesRegistro.length === 0
-                ? `Todos los productos activos tienen extracto registrado para ${periodoRegistro}.`
-                : `${pendientesRegistro.length} producto(s) activo(s) sin extracto para el período ${periodoRegistro}.`}
+                : sortedPendientes.length === 0 && pendientesRegistroTotal.length === 0
+                ? `Todos los productos activos tienen extracto registrado para ${periodoFiltro}.`
+                : `${sortedPendientes.length} producto(s) pendientes de registrar con filtro "${filtroPlazo === "para_registrar" ? "Para registrar" : filtroPlazo === "proximo" ? "Próximos cortes" : "Todos"}" para ${periodoFiltro}.`}
             </p>
 
             {sortedPendientes.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No hay productos pendientes para el filtro seleccionado.</p>
+              <div className="py-6 text-center text-sm space-y-2">
+                <p className="text-muted-foreground">
+                  {periodoFiltro !== "todos" && pendientesRegistroTotal.length === 0
+                    ? `Todos los productos activos tienen extracto registrado para ${periodoFiltro}.`
+                    : `No hay productos pendientes para el filtro seleccionado.`}
+                </p>
+                {periodoFiltro !== "todos" && pendientesRegistroTotal.length > 0 && filtroPlazo !== "todos" && (
+                  <Button size="sm" variant="outline" onClick={() => setFiltroPlazo("todos")}>
+                    Ver los {pendientesRegistroTotal.length} producto(s) de {periodoFiltro}
+                  </Button>
+                )}
+              </div>
             ) : (
               <>
                 <table className="w-full text-sm thead-sticky">
@@ -853,7 +867,7 @@ export default function Extractos() {
                                 size="sm"
                                 variant={plazo?.estado === "urgente" ? "default" : "outline"}
                                 className={cn("text-xs h-8", plazo?.estado === "urgente" && "bg-destructive text-destructive-foreground hover:bg-destructive/90")}
-                                onClick={() => setPdfModalTarget({ open: true, productoId: p.id, periodo: plazo?.periodoEsperado || "" })}
+                                onClick={() => setPdfModalTarget({ open: true, productoId: p.id, periodo: (periodoFiltro !== "todos" ? periodoFiltro : plazo?.periodoEsperado) || "" })}
                               >
                                 <FileUp className="w-3.5 h-3.5 mr-1" /> Cargar PDF
                               </Button>
@@ -992,11 +1006,11 @@ export default function Extractos() {
         onOpenChange={(v) => !v && setSaltarTarget(null)}
         producto={saltarTarget}
         periodo={(() => {
-          if (!saltarTarget) return periodoRegistro;
+          if (!saltarTarget) return periodoFiltro !== "todos" ? periodoFiltro : new Date().toISOString().substring(0, 7);
           const ev = calcularPlazo(saltarTarget);
-          return modoRegistro === "por_mes"
-            ? periodoRegistro
-            : (ev?.periodoEsperado || ev?.periodoCorte || periodoRegistro);
+          return periodoFiltro !== "todos"
+            ? periodoFiltro
+            : (ev?.periodoEsperado || ev?.periodoCorte || new Date().toISOString().substring(0, 7));
         })()}
         onConfirmado={(opts) => handleSaltar(saltarTarget, opts)}
       />

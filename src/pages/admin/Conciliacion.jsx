@@ -45,6 +45,7 @@ export default function Conciliacion() {
   const [comparacion, setComparacion] = useState(null);
   const [loadingWs, setLoadingWs] = useState(false);
   const [pdfModal, setPdfModal] = useState(false);
+  const [pdfModalTarget, setPdfModalTarget] = useState({ open: false, productoId: "", periodo: "" });
   const [editarLineaModal, setEditarLineaModal] = useState({ open: false, linea: null });
   const [modificarSistemaModal, setModificarSistemaModal] = useState({ open: false, movimiento: null });
   const [savingModificar, setSavingModificar] = useState(false);
@@ -515,7 +516,7 @@ export default function Conciliacion() {
               extractos={busquedaTdc.trim() ? extractosFiltradosTdc : extractos}
               clienteMap={clienteMap}
               onAbrir={abrirConciliacion}
-              onCargar={() => setPdfModal(true)}
+              onCargar={(prod, per) => setPdfModalTarget({ open: true, productoId: prod?.id || "", periodo: per || "" })}
               onReactivarSaltado={handleReactivarSaltado}
             />
           </TabsContent>
@@ -693,10 +694,18 @@ export default function Conciliacion() {
           </TabsContent>
         </Tabs>
         <PdfUploadDialog
-          open={pdfModal}
-          onOpenChange={setPdfModal}
-          onConfirmado={() => loadData()}
+          open={pdfModal || pdfModalTarget.open}
+          onOpenChange={(v) => {
+            setPdfModal(v);
+            if (!v) setPdfModalTarget({ open: false, productoId: "", periodo: "" });
+          }}
+          onConfirmado={() => {
+            setPdfModalTarget({ open: false, productoId: "", periodo: "" });
+            loadData();
+          }}
           productos={productos.filter((p) => p.estado === "activo")}
+          productoInicial={pdfModalTarget.productoId}
+          periodoInicial={pdfModalTarget.periodo}
         />
       </div>
     );

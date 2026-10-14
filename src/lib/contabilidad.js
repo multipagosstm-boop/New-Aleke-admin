@@ -203,25 +203,40 @@ export function evaluarCicloCorteTarjeta(producto, extractos = [], fechaRef = ne
     const prevY = m === 1 ? y - 1 : y;
     const prevMesStr = `${prevY}-${String(prevM).padStart(2, "0")}`;
 
+    const parseDateSafe = (dStr) => {
+      if (!dStr) return null;
+      const clean = String(dStr).split("T")[0];
+      const parts = clean.split("-").map(Number);
+      if (parts.length === 3 && !parts.some(isNaN)) {
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+      }
+      const parsed = new Date(dStr);
+      return isNaN(parsed.getTime()) ? null : parsed;
+    };
+
     return extsProd.some((e) => {
       const esSaltado = e.estado === "saltado" || !!e.motivo_salto || String(e.observaciones || "").includes("EXTRACTO SALTADO");
       if (esSaltado) {
         if (e.fecha_corte) {
-          const fc = new Date(e.fecha_corte + "T00:00:00");
-          const diffDias = Math.abs((fc - fechaCorte) / 86400000);
-          if (diffDias <= 7) return true;
-          if (e.fecha_corte.startsWith(mesStr)) return true;
+          const fc = parseDateSafe(e.fecha_corte);
+          if (fc) {
+            const diffDias = Math.abs((fc - fechaCorte) / 86400000);
+            if (diffDias <= 7) return true;
+          }
+          if (String(e.fecha_corte).startsWith(mesStr)) return true;
         }
         if (e.periodo === mesStr || e.periodo === nextMesStr || e.periodo === prevMesStr) return true;
       }
       if (e.fecha_corte) {
-        const fc = new Date(e.fecha_corte + "T00:00:00");
-        const diffDias = Math.abs((fc - fechaCorte) / 86400000);
-        if (diffDias <= 5) return true;
-        if (e.fecha_corte.startsWith(mesStr)) return true;
+        const fc = parseDateSafe(e.fecha_corte);
+        if (fc) {
+          const diffDias = Math.abs((fc - fechaCorte) / 86400000);
+          if (diffDias <= 5) return true;
+        }
+        if (String(e.fecha_corte).startsWith(mesStr)) return true;
       }
       if (e.periodo === mesStr) return true;
-      if (e.periodo === nextMesStr && e.fecha_corte && e.fecha_corte.startsWith(mesStr)) return true;
+      if (e.periodo === nextMesStr && e.fecha_corte && String(e.fecha_corte).startsWith(mesStr)) return true;
       return false;
     });
   };
