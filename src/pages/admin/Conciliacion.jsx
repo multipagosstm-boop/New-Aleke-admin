@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import MatrizConciliacion from "@/components/conciliacion/MatrizConciliacion";
-import { ArrowLeft, Plus, Zap, CheckCircle2, Trash2, FileUp, Pencil, Lock, Loader2, Search, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Plus, Zap, CheckCircle2, Trash2, FileUp, Pencil, Lock, Loader2, Search, AlertTriangle, FileSpreadsheet } from "lucide-react";
 import { formatCOP, formatDate, formatMonthYear, BANCO_NAMES } from "@/lib/contabilidad";
 import LineaBancoForm from "@/components/conciliacion/LineaBancoForm";
 import DiferenciasPanel from "@/components/conciliacion/DiferenciasPanel";
