@@ -2768,29 +2768,43 @@ export async function gestionarTarjeta(entities, payload = {}) {
   }
 
   if (op === "unificacion") {
-    const { tarjeta_origen_id, tarjeta_destino_id } = params;
-    const origen = await entities.ProductoCredito.get(tarjeta_origen_id);
-    const destino = await entities.ProductoCredito.get(tarjeta_destino_id);
-    if (!origen || !destino) throw new Error("Tarjetas no encontradas para unificación");
+    const destinoId = params.tarjeta_destino_id || params.permanente_id;
+    const origenIds = params.tarjeta_origen_id
+      ? [params.tarjeta_origen_id]
+      : (params.tarjeta_ids || []).filter((id) => id !== destinoId);
 
-    const nuevoCupo = (Number(destino.cupo) || 0) + (Number(origen.cupo) || 0);
-    const nuevoSaldo = (Number(destino.saldo) || 0) + (Number(origen.saldo) || 0);
+    const destino = await entities.ProductoCredito.get(destinoId);
+    if (!destino) throw new Error("Tarjeta destino permanente no encontrada para unificación");
+    if (!origenIds || origenIds.length === 0) throw new Error("Debe seleccionar al menos una tarjeta a unificar");
+
+    let cupoSumado = Number(destino.cupo) || 0;
+    let saldoSumado = Number(destino.saldo) || 0;
+    const nombresOrigenes = [];
     const now = new Date().toISOString();
 
-    await entities.ProductoCredito.update(destino.id, {
-      cupo: nuevoCupo,
-      saldo: nuevoSaldo,
-      operacion_detalle: `Unificada con ${origen.nombre} el ${now.substring(0, 10)}`
+    for (const oId of origenIds) {
+      const origen = await entities.ProductoCredito.get(oId);
+      if (origen) {
+        cupoSumado += Number(origen.cupo) || 0;
+        saldoSumado += Number(origen.saldo) || 0;
+        nombresOrigenes.push(origen.nombre || origen.nomenclatura || oId);
+
+        await entities.ProductoCredito.update(origen.id, {
+          estado: "inactivo",
+          cupo: 0,
+          saldo: 0,
+          operacion_detalle: `Inhabilitada por unificación en ${destino.nombre} (${destino.nomenclatura}) el ${now.substring(0, 10)}`
+        });
+      }
+    }
+
+    const updatedDestino = await entities.ProductoCredito.update(destino.id, {
+      cupo: cupoSumado,
+      saldo: saldoSumado,
+      operacion_detalle: `Unificada con ${nombresOrigenes.join(", ")} el ${now.substring(0, 10)}`
     });
 
-    await entities.ProductoCredito.update(origen.id, {
-      estado: "inactivo",
-      cupo: 0,
-      saldo: 0,
-      operacion_detalle: `Inhabilitada por unificación en ${destino.nombre} el ${now.substring(0, 10)}`
-    });
-
-    return { success: true, tarjeta_destino: destino, tarjeta_origen: origen };
+    return { success: true, tarjeta_destino: updatedDestino, tarjeta: updatedDestino };
   }
 
   if (op === "aumentoCupo") {
