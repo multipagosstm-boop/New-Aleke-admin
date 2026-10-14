@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Plus, Search, Ban, Edit, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, Trash2, ShieldAlert, AlertTriangle } from "lucide-react";
+import { Plus, Search, Ban, Edit, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, Trash2, ShieldAlert, AlertTriangle, X, DollarSign } from "lucide-react";
 import { formatCOP, formatDate } from "@/lib/contabilidad";
 import { cn } from "@/lib/utils";
 import ComprobanteForm from "@/components/admin/ComprobanteForm";
@@ -16,6 +16,133 @@ import LibroDiarioImportExport from "@/components/admin/LibroDiarioImportExport"
 import { useAuth } from "@/lib/AuthContext";
 import { ROLES } from "@/lib/userStore";
 import { toast } from "sonner";
+
+/**
+ * Parsea un monto monetario ingresado por el usuario en formatos comunes:
+ * - 150000 (sin formato)
+ * - 150.000 (separador de miles con punto colombiano)
+ * - 1.500.000 (múltiples puntos de miles)
+ * - 1,500,000 (separador de miles con coma anglosajón)
+ * - $ 150.000 o COP 150.000
+ * - 150.000,50 o 150,000.50 (con decimales)
+ * - 50k / 1.5m (abreviaciones miles/millones)
+ */
+export function parseSingleMonto(str) {
+  if (!str) return null;
+  let s = String(str).trim().toLowerCase();
+
+  let multiplier = 1;
+  if (s.endsWith("k")) {
+    multiplier = 1000;
+    s = s.slice(0, -1).trim();
+  } else if (s.endsWith("m") || s.endsWith("mill") || s.endsWith("millon") || s.endsWith("millones")) {
+    multiplier = 1000000;
+    s = s.replace(/m(ill(on(es)?)?)?$/, "").trim();
+  }
+
+  s = s.replace(/[\$\sCOPcop]/g, "");
+  if (!s) return null;
+
+  if (s.includes(".") && s.includes(",")) {
+    const lastDot = s.lastIndexOf(".");
+    const lastComma = s.lastIndexOf(",");
+    if (lastComma > lastDot) {
+      // 1.250.000,50 -> punto miles, coma decimal
+      s = s.replace(/\./g, "").replace(",", ".");
+    } else {
+      // 1,250,000.50 -> coma miles, punto decimal
+      s = s.replace(/,/g, "");
+    }
+  } else if (s.includes(".")) {
+    const parts = s.split(".");
+    if (parts.length > 2) {
+      // 1.500.000 -> miles
+      s = s.replace(/\./g, "");
+    } else if (parts[1] && parts[1].length === 3 && parts[0].length >= 1 && parseInt(parts[0], 10) < 10000) {
+      // 150.000 o 50.960 -> miles colombiano
+      s = s.replace(/\./g, "");
+    } else if (parts[1] && parts[1].length <= 2) {
+      // decimal ej: 50.5 o 50.50
+    } else {
+      s = s.replace(/\./g, "");
+    }
+  } else if (s.includes(",")) {
+    const parts = s.split(",");
+    if (parts.length > 2) {
+      s = s.replace(/,/g, "");
+    } else if (parts[1] && parts[1].length <= 2) {
+      s = s.replace(",", ".");
+    } else if (parts[1] && parts[1].length === 3) {
+      s = s.replace(/,/g, "");
+    } else {
+      s = s.replace(/,/g, "");
+    }
+  }
+
+  const parsed = parseFloat(s);
+  if (isNaN(parsed)) return null;
+  return parsed * multiplier;
+}
+
+export function parseInputValor(input) {
+  if (!input) return null;
+  let str = String(input).trim().toLowerCase();
+  if (!str) return null;
+
+  let op = "==";
+  if (str.startsWith(">=")) {
+    op = ">=";
+    str = str.slice(2).trim();
+  } else if (str.startsWith("<=")) {
+    op = "<=";
+    str = str.slice(2).trim();
+  } else if (str.startsWith(">")) {
+    op = ">";
+    str = str.slice(1).trim();
+  } else if (str.startsWith("<")) {
+    op = "<";
+    str = str.slice(1).trim();
+  } else if (str.includes(" - ") || /^\s*\$?\s*[\d.,]+\s*[-–]\s*\$?\s*[\d.,]+/.test(str)) {
+    const parts = str.split(/\s*[-–]\s*/);
+    if (parts.length === 2) {
+      const min = parseSingleMonto(parts[0]);
+      const max = parseSingleMonto(parts[1]);
+      if (min !== null && max !== null) {
+        return { type: "range", min: Math.min(min, max), max: Math.max(min, max) };
+      }
+    }
+  }
+
+  const num = parseSingleMonto(str);
+  if (num === null) return null;
+  return { type: "single", op, value: num };
+}
+
+export function matchesValor(amount, criteria) {
+  if (!criteria) return true;
+  if (amount === null || amount === undefined || amount === "") return false;
+  const n = Number(amount);
+  if (isNaN(n) || n === 0) return false;
+
+  if (criteria.type === "range") {
+    return n >= criteria.min - 0.01 && n <= criteria.max + 0.01;
+  }
+
+  if (criteria.op === ">=") return n >= (criteria.value ?? 0) - 0.01;
+  if (criteria.op === "<=") return n <= (criteria.value ?? 0) + 0.01;
+  if (criteria.op === ">") return n > (criteria.value ?? 0) + 0.01;
+  if (criteria.op === "<") return n < (criteria.value ?? 0) - 0.01;
+
+  if (criteria.value !== null) {
+    if (Math.abs(n - criteria.value) < 0.01) return true;
+    if (Number.isInteger(criteria.value)) {
+      if (Math.round(n) === criteria.value) return true;
+      if (Math.abs(n - criteria.value) < 1.0) return true;
+    }
+  }
+
+  return false;
+}
 
 export default function LibroDiario() {
   const [searchParams] = useSearchParams();
@@ -214,6 +341,10 @@ export default function LibroDiario() {
     return cleanQ.length > 0 && cleanT.includes(cleanQ);
   };
 
+  const criteriaValor = useMemo(() => {
+    return parseInputValor(filtroValor);
+  }, [filtroValor]);
+
   const filtered = comprobantes.filter((c) => {
     if (filtroTipo !== "all" && c.tipo !== filtroTipo) return false;
     if (filtroEstado !== "all" && c.estado !== filtroEstado) return false;
@@ -237,9 +368,13 @@ export default function LibroDiario() {
     if (filtroFecha) {
       if (c.fecha !== filtroFecha) return false;
     }
-    if (filtroValor) {
-      const v = parseFloat(filtroValor.replace(/[^\d.-]/g, ""));
-      if (!isNaN(v) && !movs.some((m) => Math.abs((m.debito || 0) - v) < 0.01 || Math.abs((m.credito || 0) - v) < 0.01)) return false;
+    if (filtroValor && filtroValor.trim()) {
+      if (criteriaValor) {
+        const matchValue = (val) => matchesValor(val, criteriaValor);
+        const compMatches = matchValue(c.total_debito) || matchValue(c.total_credito);
+        const movsMatch = movs.some((m) => matchValue(m.debito) || matchValue(m.credito));
+        if (!compMatches && !movsMatch) return false;
+      }
     }
     if (busqueda) {
       const matchComp = matchFuzzy(c.numero, busqueda) || matchFuzzy(c.descripcion, busqueda);
@@ -568,13 +703,35 @@ export default function LibroDiario() {
 
           {/* Segunda fila: Filtro por valor y botón limpiar */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/50">
-            <div className="w-full sm:w-auto">
-              <Input
-                placeholder="Monto exacto ($)"
-                value={filtroValor}
-                onChange={(e) => setFiltroValor(e.target.value)}
-                className="w-full sm:w-44 bg-background h-8 text-xs"
-              />
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <div className="relative w-full sm:w-60">
+                <Input
+                  placeholder="Filtrar por valor (ej: 150.000, >50k)"
+                  value={filtroValor}
+                  onChange={(e) => setFiltroValor(e.target.value)}
+                  className="w-full bg-background h-8 text-xs pl-7 pr-7"
+                />
+                <DollarSign className="w-3.5 h-3.5 text-muted-foreground absolute left-2 top-2.5 pointer-events-none" />
+                {filtroValor && (
+                  <button
+                    type="button"
+                    onClick={() => setFiltroValor("")}
+                    className="absolute right-2 top-2 text-muted-foreground hover:text-foreground p-0.5 rounded cursor-pointer"
+                    title="Limpiar filtro de valor"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              {criteriaValor && (
+                <Badge variant="secondary" className="text-[11px] font-mono h-6 px-1.5 shrink-0 bg-primary/10 text-primary border-primary/20">
+                  {criteriaValor.type === "range"
+                    ? `${formatCOP(criteriaValor.min)} – ${formatCOP(criteriaValor.max)}`
+                    : criteriaValor.op !== "=="
+                    ? `${criteriaValor.op} ${formatCOP(criteriaValor.value)}`
+                    : `= ${formatCOP(criteriaValor.value)}`}
+                </Badge>
+              )}
             </div>
             {(busqueda || filtroCuenta || filtroFecha || filtroValor || filtroTipo !== "all" || filtroEstado !== "all") && (
               <Button

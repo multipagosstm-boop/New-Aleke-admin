@@ -288,6 +288,7 @@ export default function CuentasAhorro() {
         onOpenChange={setConciliarOpen}
         cuentas={cuentas}
         movimientos={movimientosContables}
+        defaultPeriodo={new Date().toISOString().substring(0, 7)}
       />
     </div>
   );

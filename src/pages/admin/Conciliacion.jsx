@@ -505,6 +505,9 @@ export default function Conciliacion() {
             <TabsTrigger value="control">Control de conciliación</TabsTrigger>
             <TabsTrigger value="por_conciliar">Por conciliar ({porConciliar.length})</TabsTrigger>
             <TabsTrigger value="conciliados">Conciliados ({yaConciliados.length})</TabsTrigger>
+            <TabsTrigger value="ahorros" className="gap-1.5 text-primary">
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Conciliación de Ahorros ({cdas.length})
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="control">
             <MatrizConciliacion
@@ -601,6 +604,92 @@ export default function Conciliacion() {
             </Card>
               </div>
             )}
+          </TabsContent>
+          <TabsContent value="ahorros">
+            <Card className="border-primary/30 shadow-sm">
+              <CardContent className="p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h2 className="text-lg font-heading font-bold flex items-center gap-2">
+                      <FileSpreadsheet className="w-5 h-5 text-primary" />
+                      Módulo de Conciliación de Cuentas de Ahorros (CDA)
+                    </h2>
+                    <p className="text-xs text-muted-foreground max-w-2xl leading-relaxed">
+                      Evalúa y compara el extracto bancario en CSV contra los movimientos contables registrados en el sistema por mes o período. Detecta partidas coincidentes, faltantes en libros, movimientos duplicados, cuentas discordantes y registros mal ingresados.
+                    </p>
+                  </div>
+                  <Button
+                    onClick={() => setConciliarCdaModal(true)}
+                    className="gap-2 shadow-sm font-semibold"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    Iniciar Conciliación de Ahorros
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                  <div className="rounded-lg border border-border p-3 bg-muted/20">
+                    <div className="text-[10px] text-muted-foreground uppercase font-semibold">Cuentas CDA Activas</div>
+                    <div className="text-xl font-heading font-bold mt-1">
+                      {cdas.filter(c => c.estado === "activa").length} de {cdas.length}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Cuentas bancarias configuradas con PUC
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border p-3 bg-muted/20">
+                    <div className="text-[10px] text-muted-foreground uppercase font-semibold">Saldo Total en Libros</div>
+                    <div className="text-xl font-heading font-bold mt-1 text-primary font-mono">
+                      {formatCOP(cdas.filter(c => c.estado === "activa").reduce((s, c) => s + (Number(c.saldo) || 0), 0))}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Disponible consolidado en cuentas de ahorro
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border p-3 bg-muted/20">
+                    <div className="text-[10px] text-muted-foreground uppercase font-semibold">Movimientos para CDA</div>
+                    <div className="text-xl font-heading font-bold mt-1 font-mono">
+                      {movimientosParaCda.length}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Registros contables activos disponibles para conciliar
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <div className="bg-muted/50 px-4 py-2 border-b border-border flex items-center justify-between">
+                    <span className="text-xs font-semibold">Cuentas de Ahorro Registradas</span>
+                    <span className="text-[11px] text-muted-foreground">Período sugerido: {periodoFiltro === "todos" ? "Mes actual" : periodoFiltro}</span>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {cdas.map(c => (
+                      <div key={c.id} className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-muted/30 transition-colors">
+                        <div>
+                          <span className="font-semibold text-foreground block">{c.nombre}</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {BANCO_NAMES[c.banco] || c.banco} · Subcuenta PUC: <strong className="font-mono">{c.subcuenta_puc}</strong>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono font-bold text-foreground">{formatCOP(c.saldo || 0)}</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1"
+                            onClick={() => setConciliarCdaModal(true)}
+                          >
+                            Conciliar
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
         <PdfUploadDialog
@@ -1148,6 +1237,7 @@ export default function Conciliacion() {
         onOpenChange={setConciliarCdaModal}
         cuentas={cdas}
         movimientos={movimientosParaCda}
+        defaultPeriodo={periodoFiltro !== "todos" ? periodoFiltro : ""}
       />
 
     </div>
